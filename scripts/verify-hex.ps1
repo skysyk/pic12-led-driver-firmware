@@ -1,4 +1,7 @@
-param([Parameter(Mandatory = $true)][string]$Path)
+param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [switch]$PassThru
+)
 $ErrorActionPreference = 'Stop'
 $imageBytes = @{}
 $baseAddress = 0
@@ -55,4 +58,5 @@ if (!$imageBytes.ContainsKey(0x400e) -or !$imageBytes.ContainsKey(0x400f) -or
     ($imageBytes[0x400e] + 256 * $imageBytes[0x400f]) -ne 0x33c4) {
     throw 'Configuration word must be 0x33C4 for this board.'
 }
+if ($PassThru) { return $imageBytes }
 Write-Output ('Verified {0}: PIC flash bounds, HEX checksums, config 0x33C4, no EEPROM payload.' -f $Path)
