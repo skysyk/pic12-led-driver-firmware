@@ -14,7 +14,7 @@ These checks are pending; compilation and host simulation cannot verify them.
    toggle the indicator. Scope GP2 through boot/reset and button activity.
 4. With the main load disconnected, program `led-controller.hex`. With erased
    EEPROM, confirm GP2 is inactive at boot and standby indication is correct.
-   Scope 10%, 50%, and 100% commands; intermediate PWM should be about 1.95 kHz,
+   Scope 10%, 50%, and 100% commands; intermediate PWM should be about 37.736 kHz,
    maximum should be a static active level, and off a static inactive level.
 5. Reconnect the load with a suitable current-limited supply. Check taps, holds,
    both limits, power priority with staggered releases and a held brightness

@@ -24,9 +24,11 @@ Physical board tests have not been performed.
 - Brightness saves wait 900 ms after the last actual change; power changes request
   a save immediately, as does disabling the standby LED. Unchanged state causes no write.
 
-Logical brightness is an integer percentage. PWM is linear, rounded to a 10-bit
-duty value. Intermediate levels use CCP1/Timer2 at **1,953.125 Hz** (8 MHz,
-`PR2=255`, prescaler 1:4). Off and maximum use static inactive/active GP2 levels
+Logical brightness is an integer percentage. EEPROM retains the original 10-bit
+logical duty format; hardware output scales it to 212 counts per PWM period.
+Intermediate levels use CCP1/Timer2 at **37,735.849 Hz**, the nearest setting to
+38 kHz with the 8 MHz clock (`PR2=52`, prescaler 1:1). Off and maximum use
+static inactive/active GP2 levels
 for true 0% and 100%. Timer0 independently free-runs at **1.024 ms/tick**.
 Intervals are rounded up: debounce/ramp 20.48 ms, hold 400.384 ms, save 900.096 ms.
 

@@ -1,8 +1,9 @@
 # Validation record — 2026-10-18
 
-Implemented from the plan supplied in the project directory. The controller image
-was programmed and verified on a PIC12F683 with MiniPro on 2026-10-18. No board
-measurements or physical acceptance tests were performed.
+Implemented from the plan supplied in the project directory. An earlier controller
+image was programmed and verified on a PIC12F683 with MiniPro on 2026-10-18. The
+current nominal 38 kHz images below have been built and tested but not programmed.
+No PWM waveform measurements or completed board acceptance tests are recorded.
 
 ## Target builds
 
@@ -12,8 +13,16 @@ Both final builds completed without warnings or errors.
 
 | Image | Program words | RAM bytes | Configuration |
 | --- | --- | --- | --- |
-| `build/led-controller.hex` | 1721 / 2048 (84.0%) | 101 / 128 (78.9%) | `0x33C4` |
-| `build/indicator-only.hex` | 1010 / 2048 (49.3%) | 65 / 128 (50.8%) | `0x33C4` |
+| `build/led-controller.hex` | 1769 / 2048 (86.4%) | 101 / 128 (78.9%) | `0x33C4` |
+| `build/indicator-only.hex` | 1057 / 2048 (51.6%) | 65 / 128 (50.8%) | `0x33C4` |
+
+The controller now targets 38 kHz: 8 MHz / (4 * 1 * 53) = 37,735.849 Hz,
+using Timer2 prescaler 1:1 and PR2=52. Each period has 212 duty counts (about
+7.7 bits of resolution). The hardware conversion scales existing logical duty
+values; the EEPROM format and saved brightness remain compatible. Static output
+still supplies exact off and full-on endpoints. Standby LED polarity is unchanged
+by this PWM update; the active-low correction identified in the reconstruction
+notes has not been applied.
 
 The HEX verification script checked record lengths/checksums, flash address bounds,
 complete 14-bit words, reset vector presence, the configuration word, and absence
@@ -24,10 +33,10 @@ SHA-256 of delivered images:
 
 ```text
 led-controller.hex
-835e52a420edbd50e9b6010153a5825f899f1ffdb7379017d64a3d4d64545edd
+7024a95278aa7ec3d67eba28237022a383c3eb357427257f14a02d00e0f7313f
 
 indicator-only.hex
-fb9d8de35074daf5a304524f8fc01f29a9ebebd8e45bce55fc4f4ac14ed66508
+8d9cd1d20c142c51bc51b311c2e0e606c9bcf9cbd1740fdc0ddaae8ca34b4f61
 ```
 
 ## Host tests
@@ -36,6 +45,11 @@ Compiler: Zig 0.15.2 (`zig cc`), C99, `-Wall -Wextra -Werror -pedantic`, asserti
 enabled. `scripts/test.ps1` passed all checks in `tests/test_firmware.c`, including
 4,608 torn-write cases. The mock enforces no overlapping EEPROM operations and
 permits writes to stay busy across repeated foreground service calls.
+
+PWM tests compare all 1,024 logical duty values against independent wide-arithmetic
+scaling, check 10%/50%/100% results, and verify that every 1% brightness adjustment
+maps to a distinct hardware duty. Existing EEPROM round-trip and legacy record
+tests pass without changes to storage encoding.
 
 Power-priority regression tests cover up/down, initial on/off state, either
 staggered release order and simultaneous release, a continued hold after power
@@ -59,8 +73,10 @@ reset behavior, or actual EEPROM endurance. Those checks are listed in
 ## Physical programming
 
 `scripts/program.ps1 -Firmware .\build\led-controller.hex` completed successfully
-with MiniPro 0.7.4 and a TL866CS running firmware 03.2.86. The programmed image
-matches the controller SHA-256 above. Program memory, all 256 EEPROM bytes, four
+with MiniPro 0.7.4 and a TL866CS running firmware 03.2.86. This was the earlier
+1.953 kHz image, SHA-256
+`835e52a420edbd50e9b6010153a5825f899f1ffdb7379017d64a3d4d64545edd`.
+Program memory, all 256 EEPROM bytes, four
 user IDs, and configuration `0x33C4` passed explicit verification. EEPROM and user
 IDs were preserved from the verified pre-write backup.
 

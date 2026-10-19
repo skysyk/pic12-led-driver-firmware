@@ -17,8 +17,9 @@
 #define BOARD_INPUT_MASK 0x3au /* GP1 remains high impedance */
 
 #define _XTAL_FREQ 8000000UL
-#define BOARD_PWM_PR2 255u
-#define BOARD_PWM_PERIOD 1024u
+/* 8 MHz / (4 * 1 * 53) = 37,735.849 Hz (nearest to 38 kHz). */
+#define BOARD_PWM_PR2 52u
+#define BOARD_PWM_PERIOD (4u * (BOARD_PWM_PR2 + 1u))
 /* Timer0 free-runs at Fosc/4, prescaler 1:8: 1024 us per overflow. */
 #define TICKS_FROM_MS(ms) (((ms) * 1000UL + 1023UL) / 1024UL)
 #define BUTTON_DEBOUNCE_TICKS TICKS_FROM_MS(20)

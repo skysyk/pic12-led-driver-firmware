@@ -5,7 +5,7 @@ the locally built open-source MiniPro executable. Use the appropriate DIP8 or
 SOIC8-to-DIP adapter and correct socket placement. Keep the target off the powered
 LED board while programming. The script never selects ICSP mode.
 
-The controller image was programmed and verified with this script on 2026-10-18,
+An earlier controller image was programmed and verified with this script on 2026-10-18,
 preserving EEPROM and user IDs. The run is recorded in `validation.md`; board
 acceptance checks remain pending.
 

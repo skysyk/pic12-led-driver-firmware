@@ -10,6 +10,7 @@
 #include "dimmer.h"
 #include "hal.h"
 #include "storage.h"
+#include "pwm.h"
 
 static uint8_t eeprom[256], pending, pending_address, pending_value;
 static unsigned writes;
@@ -89,6 +90,28 @@ static void state_is(uint8_t brightness, uint8_t power_on)
 {
     assert(dimmer_state()->brightness == brightness);
     assert(dimmer_state()->power_on == power_on);
+}
+static void test_pwm_scaling(void)
+{
+    unsigned duty, percent;
+    uint16_t counts, previous = 0;
+    /* Independent wide arithmetic checks every logical duty. The EEPROM
+       scale stays unchanged while hardware duty follows the new period. */
+    for (duty = 0; duty <= 1023; ++duty) {
+        counts = pwm_duty_counts((uint16_t)duty);
+        assert(counts == ((uint32_t)duty * BOARD_PWM_PERIOD + 512u) / 1024u);
+        assert(counts >= previous && counts <= BOARD_PWM_PERIOD);
+        previous = counts;
+    }
+    assert(pwm_duty_counts(dimmer_duty(10)) == 21);
+    assert(pwm_duty_counts(dimmer_duty(50)) == 106);
+    assert(pwm_duty_counts(dimmer_duty(100)) == BOARD_PWM_PERIOD);
+    previous = 0;
+    for (percent = DIMMER_MIN_PERCENT; percent <= DIMMER_MAX_PERCENT; ++percent) {
+        counts = pwm_duty_counts(dimmer_duty((uint8_t)percent));
+        assert(counts > previous); /* Each 1% UI adjustment remains distinct. */
+        previous = counts;
+    }
 }
 static void test_buttons_and_dimming(void)
 {
@@ -538,6 +561,7 @@ static void test_failed_writes(void)
 
 int main(void)
 {
+    test_pwm_scaling();
     test_buttons_and_dimming();
     test_chords();
     test_power_long_hold_event();
@@ -549,7 +573,7 @@ int main(void)
     test_records_and_rotation();
     test_power_interruption();
     test_failed_writes();
-    puts("PASS: buttons, dimming, power overlaps, five-second standby LED disable, save policy, async writes, CRC, rotation, sequence rollover,");
+    puts("PASS: PWM scaling, buttons, dimming, power overlaps, five-second standby LED disable, save policy, async writes, CRC, rotation, sequence rollover,");
     puts("      4,608 torn-write recovery cases, and EEPROM verification failures.");
     return 0;
 }

@@ -2,6 +2,7 @@
 #include "board.h"
 #include "buttons.h"
 #include "hal.h"
+#include "pwm.h"
 
 #pragma config FOSC = INTOSCIO
 #pragma config WDTE = OFF
@@ -48,7 +49,7 @@ void hw_init(void)
     CCPR1L = 0;
     PR2 = BOARD_PWM_PR2;
     TMR2 = 0;
-    T2CON = 0x05; /* Timer2 on, prescale 1:4, postscale 1:1. */
+    T2CON = 0x04; /* Timer2 on, prescale 1:1, postscale 1:1. */
     TRISIO = BOARD_INPUT_MASK;
     EECON1 = 0;
     pending_ticks = 0;
@@ -101,7 +102,8 @@ void hw_render(uint16_t duty, uint8_t standby)
         GPIO = gpio_shadow;
         CCP1CON = 0; /* Static endpoint gives true 0% and 100%. */
     } else {
-        hardware_duty = BOARD_PWM_ACTIVE_HIGH ? duty : BOARD_PWM_PERIOD - duty;
+        hardware_duty = pwm_duty_counts(duty);
+        if (!BOARD_PWM_ACTIVE_HIGH) hardware_duty = BOARD_PWM_PERIOD - hardware_duty;
         /* Update shortly after a PWM boundary so the two duty fields latch
            together at the following boundary. Timer2 IRQ remains disabled. */
         PIR1bits.TMR2IF = 0;
