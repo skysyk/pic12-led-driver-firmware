@@ -5,8 +5,10 @@ the locally built open-source MiniPro executable. Use the appropriate DIP8 or
 SOIC8-to-DIP adapter and correct socket placement. Keep the target off the powered
 LED board while programming. The script never selects ICSP mode.
 
-An earlier controller image was programmed and verified with this script on 2026-10-18,
-preserving EEPROM and user IDs. The run is recorded in `validation.md`; board
+The current controller, with one-second mode switching and the mode-change flash,
+was programmed and verified with this script on 2026-10-19, preserving EEPROM
+and user IDs.
+The run is recorded in `validation.md`; board
 acceptance checks remain pending.
 
 ## Commands
@@ -42,9 +44,9 @@ corresponding MiniPro aliases. A device name does not change physical adapter
 wiring; check the programmer's placement guidance for the adapter being used.
 
 EEPROM is copied back by default, preserving this firmware's saved brightness
-and power state, standby LED preference, breathing mode, and breathing period.
-To start with erased EEPROM (first-run defaults: off, 50%, standby indicator
-enabled, steady mode, 3-second breathing period):
+and power state, breathing mode, period, and min/max limits. The old standby LED
+preference is ignored. To start with erased EEPROM (first-run defaults: off, 50%,
+steady mode, 3-second breathing period, 10–100% breathing limits, status LED off):
 
 ```powershell
 .\scripts\program.ps1 -ResetSettings

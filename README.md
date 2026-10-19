@@ -9,15 +9,15 @@ Physical board tests have not been performed.
 
 - Start off in steady mode at 50%, with a 3-second breathing period, when EEPROM
   is erased/invalid, without writing a default record.
-- Restore saved power, steady brightness, standby LED preference, breathing mode,
-  and breathing period on startup.
-- A short power press in standby turns the output on immediately. While on, a
-  single short press turns it off after the 350 ms double-press window expires;
-  two short releases within that window toggle steady/breathing mode without
-  switching the output off. While in standby, hold
-  power for at least five seconds to disable the standby LED. The preference
-  survives USB power loss; releasing the button does not toggle the main LEDs.
-  Long power holds while the main LEDs are on do nothing.
+- Restore saved power, steady brightness, breathing mode,
+  period, and minimum/maximum brightness on startup.
+- A power press released before one second toggles the output on/off as soon as
+  release is debounced, with no double-tap waiting window. While on, holding power
+  for one second toggles steady/breathing mode once, keeping the output on.
+  Continued holding and release do not toggle again or turn the output off.
+  A continuous power hold that starts while off arms
+  settings reset after three seconds and restores defaults after six seconds.
+  Long power holds that start while on do not reset settings.
 - In steady mode, tap up/down for a 10 percentage point change; clamp between 10% and 100%.
 - In steady mode, hold a brightness button for about 400 ms to start changing by 1 percentage point
   about every 20 ms. Release after a hold does not add a coarse step.
@@ -25,17 +25,24 @@ Physical board tests have not been performed.
 - Opposing brightness buttons cancel adjustment until both have been released.
   Power cancels overlapping brightness gestures until all brightness buttons
   have been released, including staggered releases and ongoing hold ramps.
-- Standby indicator is lit while off unless disabled, and extinguished while on.
+- The status LED flashes for half a second when switching either direction
+  between steady and breathing modes. Otherwise it is off during normal
+  standby/operation, on throughout min/max editing, and blinking during the
+  three-second reset confirmation period. Turning the output off cancels a flash.
 - Brightness and period saves wait 900 ms after the last change; power changes,
-  mode changes, and disabling the standby LED request an immediate save.
+  mode changes, editor confirmation, and settings reset request an immediate save.
   Animation alone never causes EEPROM writes. Unchanged settings cause no write.
 
 ## Breathing controls
 
-The output ramps linearly between 10% and 100%, then back down. Double-press power
+The output ramps linearly between the saved minimum and maximum (default 10% and
+100%), then back down. Hold power for one second
 while the output is on to toggle breathing. Entering starts near the saved steady
-brightness; exiting returns to that steady brightness. After power-on/restoration,
+brightness, clamped to the breathing limits; exiting returns to steady brightness. After power-on/restoration,
 breathing starts at its minimum. The full rise-and-fall cycle defaults to 3 seconds.
+Each mode toggle lights the status LED for 489 ticks (500.736 ms nominally).
+Each separate hold gives the same flash; ordinary power-on and restoring a saved mode
+do not flash. The indication does not delay controls or create EEPROM writes.
 
 While breathing, up makes the cycle 0.5 seconds longer and down makes it 0.5 seconds
 shorter. Periods wrap: up from 10 seconds selects 0.5 seconds; down from 0.5 seconds
@@ -49,30 +56,58 @@ The 1.024 ms timebase uses 488 ticks per half-second setting: actual nominal ful
 cycles are 0.499712–9.994240 seconds, before oscillator tolerance. PWM remains
 37.736 kHz; the breathing envelope is independent of the PWM carrier.
 
-### Proposed min/max UI (not implemented)
+### Min/max editor
 
-| Gesture while breathing | Proposed behavior |
+| Gesture while breathing | Behavior |
 | --- | --- |
-| Hold up and down together for 1 second | Enter minimum-brightness editing; show that level steadily |
-| Tap up/down in the editor | Adjust the selected limit by 1 percentage point; hold to ramp |
+| Hold up and down together for 1 second | Enter minimum-brightness editing; light the status LED and preview the selected level |
+| Tap up/down in the editor | Adjust by 10 percentage points, matching steady mode; hold to ramp by 1% |
 | Short power press in the editor | Switch between minimum and maximum editing; preview the selected level |
 | Hold up and down together for 1 second again | Save both limits and resume breathing |
 
-Keep minimum strictly below maximum, allowing endpoints from 0% to 100%, and
-remember both limits across power cycles. Outside the editor, up/down keep their
-period function and power keeps its normal single/double-press behavior. The
-current build has only 34 flash words free; implementing this editor and its
-persistence will require additional code-size work.
+The editor keeps minimum strictly below maximum and allows endpoints from 0% to
+100%. Coarse steps clamp at the other limit minus/plus 1% instead of crossing it.
+It pauses the animation and previews the selected limit steadily. A held
+pair triggers once; release both buttons before the next enter/exit hold. Power
+only switches the selected limit on a tap in the editor; power holds are ignored.
+Its normal on/off and mode-hold gestures resume after leaving. Individual up/down holds ramp by 1% every 20.48 ms
+after the 400 ms hold threshold, without an extra step on release.
+
+Both limits save together when you exit and survive power cycles. Unconfirmed
+edits are discarded on power loss; opening/closing without changing limits does
+not write EEPROM. Steady brightness and breathing period are preserved. The
+status LED turns off on exit. The size-optimized build fits with six flash words
+and seven RAM bytes free; physical editor checks remain pending.
+
+### Settings reset
+
+With the output off, press and continuously hold power. After three seconds, the
+status LED turns on and starts toggling every 0.5 seconds. Keep holding for three
+more seconds to restore output off, 50% steady brightness, steady mode, a 3-second
+breathing period, and 10–100% breathing limits. The LED stops blinking and an
+immediate asynchronous save is requested. Releasing before six seconds cancels
+the reset, stops blinking, and leaves the output off and preferences unchanged.
+Short power taps still turn on normally; long holds do not become taps on release.
+
+The gesture must start while logically off: a dark 0% breathing frame is still on.
+Continued holding after reset does not retrigger or cause repeated EEPROM saves.
+Reset commits a new default-settings record rather than erasing the journal, so
+an interrupted transaction retains the last valid settings. The former five-second
+standby-indicator disable feature and its preference have been removed.
 
 ## PWM and timing
 
-Logical brightness is an integer percentage. EEPROM retains the original 10-bit
-logical duty format; hardware output scales it to 212 counts per PWM period.
+Logical brightness is an integer percentage. EEPROM now stores percentages;
+legacy 10-bit duty records are decoded on startup. Runtime percentages convert
+directly to the 212-count PWM period using rounded 16-bit arithmetic, with an
+eight-bit duty interface between the state machine and hardware.
 Intermediate levels use CCP1/Timer2 at **37,735.849 Hz**, the nearest setting to
 38 kHz with the 8 MHz clock (`PR2=52`, prescaler 1:1). Off and maximum use
 static inactive/active GP2 levels
 for true 0% and 100%. Timer0 independently free-runs at **1.024 ms/tick**.
-Intervals are rounded up: debounce/ramp 20.48 ms, hold 400.384 ms, save 900.096 ms.
+Intervals are rounded up: debounce/ramp 20.48 ms, brightness hold 400.384 ms,
+power mode hold 1000.448 ms after press debounce, and save 900.096 ms.
+Power taps below that hold threshold act after release debounce (about 20 ms).
 
 ## Hardware assumptions
 
@@ -84,11 +119,11 @@ Intervals are rounded up: debounce/ramp 20.48 ms, hold 400.384 ms, save 900.096 
 | 4 | GP3 | R1, power, **external 10 kΩ pull-up to VDD** |
 | 5 | GP2/CCP1 | L1, MOSFET gate circuit |
 | 6 | GP1 | L2, input, no pull-up, never driven |
-| 7 | GP0 | L3, standby indicator |
+| 7 | GP0 | L3, edit/reset status LED (original standby indicator) |
 | 8 | VSS | L4, ground |
 
 `firmware/board.h` uses active-low buttons, active-high MOSFET drive, and an
-active-low standby indicator, matching the reconstruction notes. Wire the
+active-low status LED, matching the reconstruction notes. Wire the
 indicator as VDD → series resistor (~510 Ω) → LED anode → cathode → GP0 (pin 7).
 GP0 is high when the indicator is off and low when it is on. Verify the wiring
 against the board.
@@ -128,41 +163,64 @@ are in `hw_init.c`. For the bench build define `BOARD_INDICATOR_ONLY=1` and omit
 
 Outputs:
 
-- `build/indicator-only.hex`: GP2 always held inactive, indicator follows the
-  simulated standby state when buttons are used. Does not read or write EEPROM.
+- `build/indicator-only.hex`: GP2 always held inactive; the status LED follows
+  editor/reset gestures. To test it, hold power while off for three seconds, then
+  release before six seconds. Does not read or write EEPROM.
 - `build/led-controller.hex`: full controller with persistence.
 - Matching `.map`, `.elf`, and compiler reports for memory/debug inspection.
 
 The build does not program a chip or access the TL866CS.
 
+## Minipro programmer tool
+
+The upstream source is checked out in `minipro/`. A native 64-bit Windows build
+is in `build/minipro/minipro.exe`, alongside its chip databases and licenses.
+Use the launcher from this directory so the databases are found:
+
+```powershell
+.\scripts\minipro.ps1 -V
+.\scripts\minipro.ps1 -q tl866a -d PIC12F683
+```
+
+Rebuild with `.\scripts\build-minipro.ps1`. See
+[minipro build notes](docs/minipro-build.md) for dependencies and verification.
+
 ## EEPROM journal
 
-All 256 bytes hold 32 rotating, eight-byte records:
+The 256-byte EEPROM holds 16 rotating, 16-byte slots. Each version 4 record uses
+ten bytes; the rest is reserved. This layout makes room for both limits and keeps
+address calculations small while supporting safe migration from the 32-slot
+legacy journal.
 
 | Offset | Meaning |
 | --- | --- |
 | 0 | Commit marker `0xA5`, written last |
-| 1 | Version `3` (versions `1` and `2` are also readable) |
+| 1 | Version `4` (versions `1`–`3` remain readable at their original eight-byte locations) |
 | 2–3 | 16-bit sequence, little-endian |
-| 4–5 | 10-bit duty, little-endian |
-| 6 | Bit 0: power on; bit 1: standby LED disabled; bits 2–6: period steps minus one (0–19); bit 7: breathing enabled |
-| 7 | CRC-8/SMBUS over bytes 1–6: poly `0x07`, init `0`, no reflection/xorout |
+| 4 | Bits 0–6: steady brightness 10–100%; bit 7: power on |
+| 5 | Bits 0–6: minimum 0–99%; bit 7: zero in new saves (old indicator preference is ignored) |
+| 6 | Bits 0–6: maximum 1–100%; bit 7: breathing enabled |
+| 7 | Cycle period in half-second steps, 1–20 |
+| 8 | CRC-8/SMBUS over bytes 1–7: poly `0x07`, init `0`, no reflection/xorout |
+| 9 | Zero migration guard, invalidating an overlapping legacy version byte |
 
-Boot rejects bad markers, versions, CRCs, flags, and out-of-range duties, and
+Boot rejects bad markers, versions, CRCs, guards, and out-of-range settings, and
 compares sequences modulo 65536. This ordering assumes valid journal entries
-span fewer than 32768 updates, as normal operation of the 32-slot ring ensures.
-Stored duties are restored to the nearest integer percentage; values generated
-by this firmware round-trip exactly.
+span fewer than 32768 updates, as normal operation of the ring ensures. Bounds
+must satisfy `0 <= minimum < maximum <= 100`. Legacy duties are restored to the
+nearest integer percentage; the new format stores percentages directly.
 
-Version 1 records restore brightness and power with the standby LED enabled;
-version 2 also restores the LED preference. Both restore steady mode and the
-default breathing period. New version 3 records persist mode and period in the
-same eight bytes, without changing duty encoding or journal slot locations.
-Earlier firmware cannot read version 3 records and may restore an older record
-or defaults if downgraded.
-Holding power again after disabling the indicator leaves it disabled. To enable
-it again, erase settings using `scripts/program.ps1 -ResetSettings`; this also
-resets brightness, power, mode, and period. The indicator-only bench image never
+Versions 1/2 restore brightness and power in steady mode with the default
+breathing period. Version 3 additionally restores breathing mode and
+period. All legacy versions use default 10–100% breathing limits. The first
+version 4 save selects a slot that cannot overlap the newest valid legacy record;
+its commit marker is written only after all payload and guard bytes verify.
+The guard prevents an old odd-slot record from reappearing when a CRC equals
+`0xA5` after sequence rollover. Earlier firmware cannot read version 4 records
+and may restore an older record or defaults if downgraded.
+Legacy indicator preferences are accepted and ignored, including in older version
+4 records. New records clear that obsolete bit. Use the six-second power hold or
+`scripts/program.ps1 -ResetSettings` to restore all defaults. The bench image never
 accesses EEPROM, so its settings last only until power is disconnected.
 
 A save snapshots the requested state, invalidates the next slot, writes and
@@ -173,7 +231,7 @@ pending and are compared against the completed snapshot. Failed verification
 preserves the prior committed state and retries after one second, avoiding a
 tight write loop. A later power change can request an earlier retry.
 
-A record normally uses nine byte writes, including two writes to its marker.
+A record normally uses eleven byte writes, including two writes to its marker.
 EEPROM is never initialized by the HEX. Check the programmer's erase/preserve
 settings if retaining existing settings across firmware updates matters.
 Without power-fail detection/hold-up, abrupt USB loss can discard changes still
@@ -184,15 +242,20 @@ in the quiet window or an incomplete transaction; the previous record is retaine
 `tests/test_firmware.c` covers bounce, exact tap/hold timing, no extra step after
 a hold, limits, long holds, chords, power priority, standby adjustment, restoration,
 write avoidance, deferred/prompt saves, power/brightness overlaps with either
-release order and held buttons, the five-second standby LED gesture and its
-persistence, breathing double-press timing, all 20 complete breathing periods,
+release order and held buttons, six-second reset timing/cancellation, status LED
+rendering, one-second power holds and immediate tap timing, all 20 complete breathing periods,
 period wraparound and delayed saves, animation write avoidance, breathing power
-restoration, legacy-record compatibility, state changes during an asynchronous write,
+restoration, editor entry/exit timing, preview and save behavior, all 5,050 valid
+min/max pairs with 10% taps, 1% hold ramps, conflict prevention,
+legacy-record compatibility, state changes during an asynchronous write,
 CRC corruption, invalid fields, three complete slot rotations, sequence rollover,
 and write-verification failures with retry backoff.
 
-The power-loss matrix tests every possible torn-byte value at each of nine write
-positions, both for the first record and reuse of a full ring: **4,608 cases**.
+The power-loss matrix tests every possible torn-byte value at each of eleven write
+positions, both for the first record and reuse of a full ring: **5,632 cases**.
+An additional **11,517 migration cases** cover all legacy versions and slot
+positions, including full torn-byte coverage for representative even/odd layouts.
+Another **2,816 cases** check interrupted reset saves, for **19,965 cases** total.
 It also tests loss after the marker completes but before RAM bookkeeping.
 The mock models a single in-progress EEPROM byte; bench power cycling remains
 necessary to validate the actual power supply and EEPROM behavior.

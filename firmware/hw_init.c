@@ -2,7 +2,6 @@
 #include "board.h"
 #include "buttons.h"
 #include "hal.h"
-#include "pwm.h"
 
 #pragma config FOSC = INTOSCIO
 #pragma config WDTE = OFF
@@ -16,7 +15,7 @@
 
 static volatile uint8_t pending_ticks;
 static uint8_t gpio_shadow;
-static uint16_t last_duty;
+static uint8_t last_duty;
 
 void __interrupt() timer_isr(void)
 {
@@ -37,8 +36,8 @@ void hw_init(void)
     VRCON = 0;
     TRISIO = 0x3f; /* Initialize latches before enabling output drivers. */
     gpio_shadow = BOARD_PWM_ACTIVE_HIGH ? 0 : BOARD_PWM_MASK;
-    /* Start with standby indicator extinguished. */
-#if !BOARD_STANDBY_ACTIVE_HIGH
+    /* Start with the status indicator extinguished. */
+#if !BOARD_STATUS_ACTIVE_HIGH
     gpio_shadow |= BOARD_LED_MASK;
 #endif
     GPIO = gpio_shadow;
@@ -55,7 +54,7 @@ void hw_init(void)
     TRISIO = BOARD_INPUT_MASK;
     EECON1 = 0;
     pending_ticks = 0;
-    last_duty = 0xffffu;
+    last_duty = 255u;
     TMR0 = 0;
     INTCONbits.T0IF = 0;
     INTCONbits.T0IE = 1;
@@ -82,27 +81,27 @@ uint8_t hw_buttons(void)
     return (uint8_t)((raw >> 3) & (BUTTON_POWER | BUTTON_BRIGHTNESS));
 }
 
-void hw_render(uint16_t duty, uint8_t standby)
+void hw_render(uint8_t duty, uint8_t indicator)
 {
-    uint16_t hardware_duty;
+    uint8_t hardware_duty;
     uint8_t level;
 #if BOARD_INDICATOR_ONLY
     duty = 0;
 #endif
-    if (standby == BOARD_STANDBY_ACTIVE_HIGH) gpio_shadow |= BOARD_LED_MASK;
+    if (indicator == BOARD_STATUS_ACTIVE_HIGH) gpio_shadow |= BOARD_LED_MASK;
     else gpio_shadow &= (uint8_t)~BOARD_LED_MASK;
     /* Full GPIO writes avoid read-modify-write of a live CCP1 output. */
     GPIO = gpio_shadow;
     if (duty == last_duty) return;
     last_duty = duty;
-    if (duty == 0 || duty >= 1023u) {
+    if (duty == 0 || duty >= BOARD_PWM_PERIOD) {
         level = (uint8_t)((duty != 0) == BOARD_PWM_ACTIVE_HIGH);
         if (level) gpio_shadow |= BOARD_PWM_MASK;
         else gpio_shadow &= (uint8_t)~BOARD_PWM_MASK;
         GPIO = gpio_shadow;
         CCP1CON = 0; /* Static endpoint gives true 0% and 100%. */
     } else {
-        hardware_duty = pwm_duty_counts(duty);
+        hardware_duty = duty;
         if (!BOARD_PWM_ACTIVE_HIGH) hardware_duty = BOARD_PWM_PERIOD - hardware_duty;
         /* Update shortly after a PWM boundary so the two duty fields latch
            together at the following boundary. Timer2 IRQ remains disabled. */

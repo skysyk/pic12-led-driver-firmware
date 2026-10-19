@@ -5,8 +5,10 @@
 #define BUTTON_UP 2u
 #define BUTTON_DOWN 4u
 #define BUTTON_BRIGHTNESS (BUTTON_UP | BUTTON_DOWN)
+#define POWER_RESET_ARM 1u
+#define POWER_RESET_COMMIT 2u
 typedef struct {
-    uint8_t down, pressed, released, short_press, held, repeat, long_held;
+    uint8_t down, pressed, released, short_press, held, repeat, power_hold;
 } button_events_t;
 void buttons_init(void);
 /* Logical pressed mask, independent of GPIO polarity. Call once per tick. */

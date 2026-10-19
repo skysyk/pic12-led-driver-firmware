@@ -5,7 +5,7 @@
 #define BOARD_BUTTONS_ACTIVE_LOW 1
 #define BOARD_PWM_ACTIVE_HIGH 1
 /* QY-K4 indicator cathode connects to GP0; anode goes via R7 to VDD. */
-#define BOARD_STANDBY_ACTIVE_HIGH 0
+#define BOARD_STATUS_ACTIVE_HIGH 0
 #ifndef BOARD_INDICATOR_ONLY
 #define BOARD_INDICATOR_ONLY 0
 #endif
@@ -25,9 +25,13 @@
 #define TICKS_FROM_MS(ms) (((ms) * 1000UL + 1023UL) / 1024UL)
 #define BUTTON_DEBOUNCE_TICKS TICKS_FROM_MS(20)
 #define BUTTON_HOLD_TICKS TICKS_FROM_MS(400)
-#define BUTTON_STANDBY_HOLD_TICKS TICKS_FROM_MS(5000)
+#define BUTTON_RESET_ARM_TICKS TICKS_FROM_MS(3000)
+#define BUTTON_RESET_COMMIT_TICKS TICKS_FROM_MS(6000)
+#define STATUS_BLINK_TICKS TICKS_FROM_MS(500)
+#define STATUS_MODE_FLASH_TICKS TICKS_FROM_MS(500)
 #define BUTTON_RAMP_TICKS TICKS_FROM_MS(20)
-#define BUTTON_DOUBLE_TICKS TICKS_FROM_MS(350)
+#define BUTTON_MODE_TICKS TICKS_FROM_MS(1000)
+#define BUTTON_EDITOR_TICKS TICKS_FROM_MS(1000)
 /* 488 Timer0 ticks = 499.712 ms; period is 1..20 half-second steps. */
 #define BREATHE_STEP_TICKS 488u
 #define BREATHE_DEFAULT_PERIOD 6u
@@ -48,7 +52,7 @@
 #if DIMMER_DEFAULT_PERCENT < DIMMER_MIN_PERCENT || DIMMER_DEFAULT_PERCENT > DIMMER_MAX_PERCENT
 #error Invalid default brightness
 #endif
-#if DIMMER_STEP_PERCENT < 1 || DIMMER_RAMP_PERCENT < 1
+#if DIMMER_STEP_PERCENT < 1 || DIMMER_RAMP_PERCENT < 1 || DIMMER_STEP_PERCENT > 100 || DIMMER_RAMP_PERCENT > 100
 #error Brightness increments must be positive
 #endif
 #if BUTTON_DEBOUNCE_TICKS < 1 || BUTTON_DEBOUNCE_TICKS > 255 || BUTTON_RAMP_TICKS < 1 || BUTTON_RAMP_TICKS > 255
@@ -57,7 +61,13 @@
 #if BUTTON_HOLD_TICKS < 1 || BUTTON_HOLD_TICKS > 65535 || STORAGE_DELAY_TICKS > 65535 || STORAGE_RETRY_TICKS > 65535
 #error Hold and storage intervals must fit sixteen-bit counters
 #endif
-#if BUTTON_STANDBY_HOLD_TICKS <= BUTTON_HOLD_TICKS || BUTTON_STANDBY_HOLD_TICKS > 65535
-#error Standby hold must exceed the normal hold and fit a sixteen-bit counter
+#if BUTTON_MODE_TICKS <= BUTTON_HOLD_TICKS || BUTTON_RESET_ARM_TICKS <= BUTTON_MODE_TICKS || BUTTON_RESET_COMMIT_TICKS <= BUTTON_RESET_ARM_TICKS || BUTTON_RESET_COMMIT_TICKS > 65535
+#error Reset hold must exceed the normal hold and fit a sixteen-bit counter
+#endif
+#if BOARD_PWM_PERIOD > 255u
+#error PWM duty counts must fit eight bits
+#endif
+#if STATUS_MODE_FLASH_TICKS < 1 || STATUS_MODE_FLASH_TICKS > 65535
+#error Mode flash interval must fit a sixteen-bit counter
 #endif
 #endif

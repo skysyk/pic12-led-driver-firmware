@@ -2,11 +2,12 @@
 #include "hal.h"
 #include "storage.h"
 
+/* Boot scans 32 legacy eight-byte half-slots; new records use even half-slots. */
 #define SLOT_COUNT 32u
-#define RECORD_SIZE 8u
+#define RECORD_SIZE 10u
 #define COMMIT 0xa5u
 #define LEGACY_VERSION 1u
-#define VERSION 3u
+#define VERSION 4u
 #define IDLE 0u
 #define INVALIDATE 1u
 #define PAYLOAD 2u
@@ -15,7 +16,10 @@
 
 static dimmer_state_t saved, requested, snapshot;
 static uint16_t sequence, delay_ticks;
-static uint8_t last_slot, have_saved, phase, position, target_slot, fault;
+static uint8_t last_slot, have_saved, phase, position, target_slot;
+#ifdef FIRMWARE_TEST
+static uint8_t fault;
+#endif
 static uint8_t record[RECORD_SIZE];
 
 static uint8_t equal(const dimmer_state_t *a, const dimmer_state_t *b)
@@ -26,11 +30,11 @@ static uint8_t equal(const dimmer_state_t *a, const dimmer_state_t *b)
     return 1;
 }
 
-static uint8_t crc8(void)
+static uint8_t crc8(uint8_t last)
 {
     uint8_t crc = 0, i, bit;
     /* CRC-8/SMBUS: polynomial 0x07, init 0, no reflection/xorout. */
-    for (i = 1; i <= 6; ++i) {
+    for (i = 1; i <= last; ++i) {
         crc ^= record[i];
         for (bit = 0; bit < 8; ++bit)
             crc = (uint8_t)((crc & 0x80u) ? ((uint16_t)crc << 1) ^ 0x07u : (uint16_t)crc << 1);
@@ -40,7 +44,7 @@ static uint8_t crc8(void)
 
 static uint8_t address(uint8_t offset)
 {
-    return (uint8_t)(target_slot * RECORD_SIZE + offset);
+    return (uint8_t)(target_slot * 8u + offset);
 }
 
 void storage_init(dimmer_state_t *restored)
@@ -48,37 +52,55 @@ void storage_init(dimmer_state_t *restored)
     uint8_t slot, i;
     uint16_t candidate, difference, duty;
     phase = IDLE;
-    fault = have_saved = 0;
+    have_saved = 0;
+#ifdef FIRMWARE_TEST
+    fault = 0;
+#endif
     sequence = delay_ticks = 0;
     last_slot = SLOT_COUNT - 1;
-    saved.brightness = DIMMER_DEFAULT_PERCENT;
-    saved.power_on = 0;
-    saved.standby_led_disabled = 0;
-    saved.breath = BREATHE_DEFAULT_PERIOD;
+    dimmer_defaults(&saved);
     for (slot = 0; slot < SLOT_COUNT; ++slot) {
-        for (i = 0; i < RECORD_SIZE; ++i)
-            record[i] = hal_eeprom_read((uint8_t)(slot * RECORD_SIZE + i));
-        duty = (uint16_t)(record[4] | ((uint16_t)record[5] << 8));
-        if (record[0] != COMMIT || record[1] < LEGACY_VERSION || record[1] > VERSION ||
-            (record[1] != VERSION && record[6] > (record[1] == LEGACY_VERSION ? 1u : 3u)) ||
-            record[7] != crc8()) continue;
-        if (duty < (uint16_t)((DIMMER_MIN_PERCENT * 1023UL + 50u) / 100u) ||
-            duty > (uint16_t)((DIMMER_MAX_PERCENT * 1023UL + 50u) / 100u) ||
-            (record[1] == VERSION && ((record[6] >> 2) & 31u) >= BREATHE_MAX_PERIOD)) continue;
+        for (i = 0; i < 8u; ++i)
+            record[i] = hal_eeprom_read((uint8_t)(slot * 8u + i));
+        if (record[0] != COMMIT || record[1] < LEGACY_VERSION || record[1] > VERSION) continue;
+        if (record[1] == VERSION) {
+            if (slot & 1u) continue;
+            record[8] = hal_eeprom_read((uint8_t)(slot * 8u + 8u));
+            record[9] = hal_eeprom_read((uint8_t)(slot * 8u + 9u));
+            if (record[9] || record[8] != crc8(7) || (record[4] & 127u) < DIMMER_MIN_PERCENT ||
+                (record[4] & 127u) > DIMMER_MAX_PERCENT ||
+                (record[5] & 127u) >= (record[6] & 127u) || (record[6] & 127u) > 100u ||
+                record[7] < 1u || record[7] > BREATHE_MAX_PERIOD) continue;
+        } else {
+            duty = (uint16_t)(record[4] | ((uint16_t)record[5] << 8));
+            if ((record[1] != 3u && record[6] > (record[1] == LEGACY_VERSION ? 1u : 3u)) ||
+                record[7] != crc8(6)) continue;
+            if (duty < (uint16_t)((DIMMER_MIN_PERCENT * 1023UL + 50u) / 100u) ||
+                duty > (uint16_t)((DIMMER_MAX_PERCENT * 1023UL + 50u) / 100u) ||
+                (record[1] == 3u && ((record[6] >> 2) & 31u) >= BREATHE_MAX_PERIOD)) continue;
+        }
         candidate = (uint16_t)(record[2] | ((uint16_t)record[3] << 8));
         difference = (uint16_t)(candidate - sequence);
         if (!have_saved || (difference != 0 && difference < 0x8000u)) {
             sequence = candidate;
             last_slot = slot;
             have_saved = 1;
-            /* Nearest integer percent; exact round trip for our own records. */
-            saved.brightness = (uint8_t)((duty * 25u + 128u) / 256u);
-            saved.power_on = record[6] & 1u;
-            saved.standby_led_disabled = (record[6] >> 1) & 1u;
-            saved.breath = BREATHE_DEFAULT_PERIOD;
-            if (record[1] == VERSION)
-                saved.breath = (uint8_t)((record[6] & BREATHE_MODE) |
-                    (((record[6] >> 2) & BREATHE_PERIOD_MASK) + 1u));
+            if (record[1] == VERSION) {
+                saved.brightness = record[4] & 127u;
+                saved.power_on = record[4] >> 7;
+                saved.minimum = record[5] & 127u;
+                saved.maximum = record[6] & 127u;
+                saved.breath = (uint8_t)((record[6] & BREATHE_MODE) | record[7]);
+            } else {
+                saved.brightness = (uint8_t)((duty * 25u + 128u) / 256u);
+                saved.power_on = record[6] & 1u;
+                saved.breath = BREATHE_DEFAULT_PERIOD;
+                if (record[1] == 3u)
+                    saved.breath = (uint8_t)((record[6] & BREATHE_MODE) |
+                        (((record[6] >> 2) & BREATHE_PERIOD_MASK) + 1u));
+                saved.minimum = DIMMER_MIN_PERCENT;
+                saved.maximum = DIMMER_MAX_PERCENT;
+            }
         }
     }
     requested = saved;
@@ -104,29 +126,35 @@ static void fail(void)
 {
     /* Do not advance saved/sequence/slot. A later attempt reuses this slot. */
     phase = IDLE;
+#ifdef FIRMWARE_TEST
     fault = 1;
+#endif
     delay_ticks = STORAGE_RETRY_TICKS;
 }
 
 void storage_service(void)
 {
-    uint16_t next, duty;
+    uint16_t next;
     if (hal_eeprom_busy()) return;
     if (phase == IDLE) {
         if (delay_ticks || equal(&requested, &saved)) return;
         snapshot = requested;
-        target_slot = (uint8_t)((last_slot + 1u) & (SLOT_COUNT - 1u));
+        /* Even half-slots are 16-byte records. Advancing past the last
+           half-slot also protects a legacy eight-byte record during migration. */
+        target_slot = (uint8_t)((last_slot + 2u) & 30u);
         next = (uint16_t)(sequence + 1u);
-        duty = dimmer_duty(snapshot.brightness);
         record[0] = 0;
         record[1] = VERSION;
         record[2] = (uint8_t)next;
         record[3] = (uint8_t)(next >> 8);
-        record[4] = (uint8_t)duty;
-        record[5] = (uint8_t)(duty >> 8);
-        record[6] = (uint8_t)(snapshot.power_on | (uint8_t)(snapshot.standby_led_disabled << 1) |
-            (((snapshot.breath & BREATHE_PERIOD_MASK) - 1u) << 2) | (snapshot.breath & BREATHE_MODE));
-        record[7] = crc8();
+        record[4] = (uint8_t)(snapshot.brightness | (snapshot.power_on << 7));
+        record[5] = snapshot.minimum; /* Former standby preference is obsolete. */
+        record[6] = (uint8_t)(snapshot.maximum | (snapshot.breath & BREATHE_MODE));
+        record[7] = snapshot.breath & BREATHE_PERIOD_MASK;
+        record[8] = crc8(7);
+        /* Kill the overlapping legacy odd-half-slot version byte. Otherwise
+           CRC==0xA5 could revive an ancient record after sequence rollover. */
+        record[9] = 0;
         hal_eeprom_start_write(address(0), 0);
         phase = INVALIDATE;
         return;
@@ -148,7 +176,9 @@ void storage_service(void)
         last_slot = target_slot;
         have_saved = 1;
         phase = IDLE;
+#ifdef FIRMWARE_TEST
         fault = 0;
+#endif
         return;
     }
     if (phase == PAYLOAD) {

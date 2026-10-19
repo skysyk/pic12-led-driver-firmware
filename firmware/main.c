@@ -13,15 +13,12 @@ void main(void)
     buttons_init();
 #if BOARD_INDICATOR_ONLY
     /* The bench image never reads or changes persistent settings. */
-    restored.brightness = DIMMER_DEFAULT_PERCENT;
-    restored.power_on = 0;
-    restored.standby_led_disabled = 0;
-    restored.breath = BREATHE_DEFAULT_PERIOD;
+    dimmer_defaults(&restored);
 #else
     storage_init(&restored);
 #endif
     dimmer_init(&restored);
-    hw_render(dimmer_output(), dimmer_standby_led());
+    hw_render(dimmer_output(), dimmer_status_led());
     for (;;) {
         if (hw_take_tick()) {
 #if !BOARD_INDICATOR_ONLY
@@ -34,7 +31,7 @@ void main(void)
                 if (changed & DIMMER_CHANGED)
                     storage_request(dimmer_state(), changed & DIMMER_IMMEDIATE_SAVE);
 #endif
-                hw_render(dimmer_output(), dimmer_standby_led());
+                hw_render(dimmer_output(), dimmer_status_led());
             }
         }
 #if !BOARD_INDICATOR_ONLY

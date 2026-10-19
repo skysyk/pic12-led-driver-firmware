@@ -18,7 +18,7 @@ try {
     }
     New-Item -ItemType Directory -Path build -Force | Out-Null
     $image = if ($IndicatorOnly) { 'indicator-only' } else { 'led-controller' }
-    $options = @('-mcpu=12F683', '-std=c99', '-O2', '-Ifirmware', '-ginhx32', ('-Wl,-Map=build/' + $image + '.map'))
+    $options = @('-mcpu=12F683', '-std=c99', '-Os', '-Ifirmware', '-ginhx32', ('-Wl,-Map=build/' + $image + '.map'))
     if ($DevicePack) { $options += '-mdfp=' + $DevicePack }
     if ($IndicatorOnly) { $options += '-DBOARD_INDICATOR_ONLY=1' }
     $sources = @('firmware/main.c', 'firmware/hw_init.c', 'firmware/buttons.c', 'firmware/dimmer.c')
