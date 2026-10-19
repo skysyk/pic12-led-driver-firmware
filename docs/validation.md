@@ -1,7 +1,8 @@
 # Validation record — 2026-10-18
 
-Implemented from the plan supplied in the project directory. No device was
-programmed, and no board measurements or physical acceptance tests were performed.
+Implemented from the plan supplied in the project directory. The controller image
+was programmed and verified on a PIC12F683 with MiniPro on 2026-10-18. No board
+measurements or physical acceptance tests were performed.
 
 ## Target builds
 
@@ -54,6 +55,23 @@ These tests exercise production button, dimming, and journal sources. They do no
 simulate PIC special-function registers, pin voltages, PWM edge timing, electrical
 reset behavior, or actual EEPROM endurance. Those checks are listed in
 `bench-checklist.md`.
+
+## Physical programming
+
+`scripts/program.ps1 -Firmware .\build\led-controller.hex` completed successfully
+with MiniPro 0.7.4 and a TL866CS running firmware 03.2.86. The programmed image
+matches the controller SHA-256 above. Program memory, all 256 EEPROM bytes, four
+user IDs, and configuration `0x33C4` passed explicit verification. EEPROM and user
+IDs were preserved from the verified pre-write backup.
+
+The run completed at `2026-10-19T03:41:43Z` (2026-10-18 local time). Backup files,
+input binaries, hashes, and the complete log are retained in
+`backups/program-pic12f683-20261019T034126841Z-3f2a21/`.
+
+The initial attempt stopped before chip access because database options and paths
+were combined into single arguments. The argument construction was corrected,
+the mock test now rejects that form, and the script tests passed before the
+successful hardware retry.
 
 ## Tool provenance
 

@@ -44,7 +44,7 @@ $MiniPro = $miniProCommand.Source
 $databaseArgs = @()
 foreach ($database in @('infoic', 'logicic')) {
     $databasePath = (Resolve-Path -LiteralPath (Join-Path $DatabaseDirectory ($database + '.xml'))).ProviderPath
-    $databaseArgs += @('--' + $database, $databasePath)
+    $databaseArgs += @(('--' + $database), $databasePath)
 }
 $settingsPolicy = if ($ResetSettings) { 'reset EEPROM to erased 0xFF' } else { 'preserve all 256 EEPROM bytes' }
 Write-Host "Firmware: $firmwarePath"

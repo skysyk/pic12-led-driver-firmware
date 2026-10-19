@@ -9,6 +9,12 @@ $ErrorActionPreference = 'Stop'
 $root = $env:PIC_MINIPRO_TEST_STATE
 Add-Content -LiteralPath (Join-Path $root 'calls.jsonl') -Value (ConvertTo-Json -InputObject @($args) -Compress)
 $argList = @($args)
+if ($argList.Count -lt 7 -or $argList[0] -ne '--infoic' -or $argList[2] -ne '--logicic' -or $argList[4] -ne '-p') {
+    throw 'Database options, paths, and device selector must be separate arguments'
+}
+if (!(Test-Path -LiteralPath $argList[1] -PathType Leaf) -or !(Test-Path -LiteralPath $argList[3] -PathType Leaf)) {
+    throw 'Database arguments must name existing files'
+}
 if ($argList -contains '-V') { Write-Output 'Found TL866CS 03.2.86 (0x256)'; exit 0 }
 if ($argList -contains '-D') {
     if ($env:PIC_MINIPRO_TEST_FAIL -eq 'id') { exit 2 }
