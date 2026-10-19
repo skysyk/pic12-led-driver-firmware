@@ -20,6 +20,10 @@ These checks are pending; compilation and host simulation cannot verify them.
    both limits, power priority with staggered releases and a held brightness
    button, opposing-button cancellation, standby restoration,
    and standby brightness adjustment. Check for startup flashes during USB cycling.
+   In standby, hold power for five seconds: only the indicator should turn off,
+   releasing power must leave the main LEDs off, and unplug/reconnect must retain
+   the disabled indicator. A shorter hold and a long hold while on must not disable
+   it. Repeated long holds must leave it disabled without extra EEPROM writes.
 6. Adjust brightness, wait at least a second, disconnect USB briefly and for longer,
    and verify restoration. Toggle off and repeat. Unplug during a ramp and within
    the quiet window; expect the last fully committed state. A prompt save still

@@ -9,7 +9,9 @@ void dimmer_init(const dimmer_state_t *s)
     brightness_blocked = 0;
 }
 
+#if !BOARD_INDICATOR_ONLY || defined(FIRMWARE_TEST)
 const dimmer_state_t *dimmer_state(void) { return &current; }
+#endif
 
 uint16_t dimmer_duty(uint8_t percent)
 {
@@ -23,12 +25,21 @@ uint16_t dimmer_output(void)
     return current.power_on ? dimmer_duty(current.brightness) : 0;
 }
 
+uint8_t dimmer_standby_led(void)
+{
+    return (uint8_t)(!current.power_on && !current.standby_led_disabled);
+}
+
 uint8_t dimmer_tick(const button_events_t *e)
 {
     uint8_t amount, action, previous, was_on;
     if ((e->down & BUTTON_BRIGHTNESS) == BUTTON_BRIGHTNESS ||
         ((e->down | e->released) & BUTTON_POWER))
         brightness_blocked = 1;
+    if ((e->long_held & BUTTON_POWER) && !current.power_on && !current.standby_led_disabled) {
+        current.standby_led_disabled = 1;
+        return DIMMER_CHANGED | DIMMER_PREFERENCE_CHANGED;
+    }
     /* Power cancels overlapping brightness gestures, including release events
        and later repeats. Re-arm only after all brightness buttons are up. */
     if (brightness_blocked) {

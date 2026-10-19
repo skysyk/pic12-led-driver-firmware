@@ -23,6 +23,7 @@
 #define TICKS_FROM_MS(ms) (((ms) * 1000UL + 1023UL) / 1024UL)
 #define BUTTON_DEBOUNCE_TICKS TICKS_FROM_MS(20)
 #define BUTTON_HOLD_TICKS TICKS_FROM_MS(400)
+#define BUTTON_STANDBY_HOLD_TICKS TICKS_FROM_MS(5000)
 #define BUTTON_RAMP_TICKS TICKS_FROM_MS(20)
 #define STORAGE_DELAY_TICKS TICKS_FROM_MS(900)
 #define STORAGE_RETRY_TICKS TICKS_FROM_MS(1000)
@@ -46,5 +47,8 @@
 #endif
 #if BUTTON_HOLD_TICKS < 1 || BUTTON_HOLD_TICKS > 65535 || STORAGE_DELAY_TICKS > 65535 || STORAGE_RETRY_TICKS > 65535
 #error Hold and storage intervals must fit sixteen-bit counters
+#endif
+#if BUTTON_STANDBY_HOLD_TICKS <= BUTTON_HOLD_TICKS || BUTTON_STANDBY_HOLD_TICKS > 65535
+#error Standby hold must exceed the normal hold and fit a sixteen-bit counter
 #endif
 #endif

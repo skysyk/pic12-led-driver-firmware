@@ -8,8 +8,11 @@ Physical board tests have not been performed.
 ## Behavior
 
 - Start off at 50% with erased/invalid EEPROM, without writing a default record.
-- Restore the most recent valid saved power state and brightness on startup.
-- Power toggles on release of a debounced short press. A long power hold does nothing.
+- Restore the most recent valid saved power state, brightness, and standby LED preference on startup.
+- Power toggles on release of a debounced short press. While in standby, hold
+  power for at least five seconds to disable the standby LED. The preference
+  survives USB power loss; releasing the button does not toggle the main LEDs.
+  Long power holds while the main LEDs are on do nothing.
 - Tap up/down for a 10 percentage point change; clamp between 10% and 100%.
 - Hold a brightness button for about 400 ms to start changing by 1 percentage point
   about every 20 ms. Release after a hold does not add a coarse step.
@@ -17,9 +20,9 @@ Physical board tests have not been performed.
 - Opposing brightness buttons cancel adjustment until both have been released.
   Power cancels overlapping brightness gestures until all brightness buttons
   have been released, including staggered releases and ongoing hold ramps.
-- Standby indicator is lit while off and extinguished while on.
+- Standby indicator is lit while off unless disabled, and extinguished while on.
 - Brightness saves wait 900 ms after the last actual change; power changes request
-  a save immediately. Unchanged state causes no write.
+  a save immediately, as does disabling the standby LED. Unchanged state causes no write.
 
 Logical brightness is an integer percentage. PWM is linear, rounded to a 10-bit
 duty value. Intermediate levels use CCP1/Timer2 at **1,953.125 Hz** (8 MHz,
@@ -92,10 +95,10 @@ All 256 bytes hold 32 rotating, eight-byte records:
 | Offset | Meaning |
 | --- | --- |
 | 0 | Commit marker `0xA5`, written last |
-| 1 | Version `1` |
+| 1 | Version `2` (version `1` records are also readable) |
 | 2–3 | 16-bit sequence, little-endian |
 | 4–5 | 10-bit duty, little-endian |
-| 6 | Power flag, `0` or `1` |
+| 6 | Bit 0: power on; bit 1: standby LED disabled; other bits must be zero |
 | 7 | CRC-8/SMBUS over bytes 1–6: poly `0x07`, init `0`, no reflection/xorout |
 
 Boot rejects bad markers, versions, CRCs, flags, and out-of-range duties, and
@@ -103,6 +106,13 @@ compares sequences modulo 65536. This ordering assumes valid journal entries
 span fewer than 32768 updates, as normal operation of the 32-slot ring ensures.
 Stored duties are restored to the nearest integer percentage; values generated
 by this firmware round-trip exactly.
+
+Version 1 records restore brightness and power with the standby LED enabled.
+New records use version 2 to persist the LED preference in the same eight bytes.
+Holding power again after disabling the indicator leaves it disabled. To enable
+it again, erase settings using `scripts/program.ps1 -ResetSettings`; this also
+resets brightness and power. The indicator-only bench image never accesses
+EEPROM, so its LED preference lasts only until power is disconnected.
 
 A save snapshots the requested state, invalidates the next slot, writes and
 verifies each payload byte, then writes and verifies the final marker. It never
@@ -123,7 +133,8 @@ in the quiet window or an incomplete transaction; the previous record is retaine
 `tests/test_firmware.c` covers bounce, exact tap/hold timing, no extra step after
 a hold, limits, long holds, chords, power priority, standby adjustment, restoration,
 write avoidance, deferred/prompt saves, power/brightness overlaps with either
-release order and held buttons, state changes during an asynchronous write,
+release order and held buttons, the five-second standby LED gesture and its
+persistence, legacy-record compatibility, state changes during an asynchronous write,
 CRC corruption, invalid fields, three complete slot rotations, sequence rollover,
 and write-verification failures with retry backoff.
 

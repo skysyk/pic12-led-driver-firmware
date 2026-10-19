@@ -18,7 +18,7 @@ void buttons_init(void)
 void buttons_tick(uint8_t raw, button_events_t *e)
 {
     uint8_t i, mask;
-    e->pressed = e->released = e->short_press = e->held = e->repeat = 0;
+    e->pressed = e->released = e->short_press = e->held = e->repeat = e->long_held = 0;
     for (i = 0, mask = 1; i < 3; ++i, mask <<= 1) {
         if ((raw ^ stable) & mask) {
             if (++debounce[i] >= BUTTON_DEBOUNCE_TICKS) {
@@ -44,6 +44,12 @@ void buttons_tick(uint8_t raw, button_events_t *e)
                     e->held |= mask;
                     e->repeat |= mask;
                 }
+            } else if (mask == BUTTON_POWER) {
+                /* Continue timing power after the normal hold suppresses its
+                   short-press event; saturate so a long hold cannot retrigger. */
+                if (duration[i] < BUTTON_STANDBY_HOLD_TICKS &&
+                    ++duration[i] == BUTTON_STANDBY_HOLD_TICKS)
+                    e->long_held |= mask;
             } else if (++repeat_count[i] >= BUTTON_RAMP_TICKS) {
                 repeat_count[i] = 0;
                 e->repeat |= mask;

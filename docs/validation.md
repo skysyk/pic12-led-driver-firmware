@@ -11,8 +11,8 @@ Both final builds completed without warnings or errors.
 
 | Image | Program words | RAM bytes | Configuration |
 | --- | --- | --- | --- |
-| `build/led-controller.hex` | 1565 / 2048 (76.4%) | 95 / 128 (74.2%) | `0x33C4` |
-| `build/indicator-only.hex` | 940 / 2048 (45.9%) | 64 / 128 (50.0%) | `0x33C4` |
+| `build/led-controller.hex` | 1721 / 2048 (84.0%) | 101 / 128 (78.9%) | `0x33C4` |
+| `build/indicator-only.hex` | 1010 / 2048 (49.3%) | 65 / 128 (50.8%) | `0x33C4` |
 
 The HEX verification script checked record lengths/checksums, flash address bounds,
 complete 14-bit words, reset vector presence, the configuration word, and absence
@@ -23,10 +23,10 @@ SHA-256 of delivered images:
 
 ```text
 led-controller.hex
-664c529cb1833b0aa643f80e7dfd38f0b6777735ace325e94fb3bd3a1ae95a04
+835e52a420edbd50e9b6010153a5825f899f1ffdb7379017d64a3d4d64545edd
 
 indicator-only.hex
-23b422fff285c22be187849fd2c85d362276ec23e97974e759dd6cd9aac23685
+fb9d8de35074daf5a304524f8fc01f29a9ebebd8e45bce55fc4f4ac14ed66508
 ```
 
 ## Host tests
@@ -41,6 +41,14 @@ staggered release order and simultaneous release, a continued hold after power
 release, cancellation of an existing ramp, persistence of the chosen power state,
 and normal operation after a fresh brightness press. The staggered-release
 regression failed before the fix and passed after it.
+
+Standby LED tests cover the five-second threshold, early release, no short press
+on release, no retrigger after prolonged holds or counter rollover, holds while
+on, overlapping brightness buttons, immediate saving, persistence across reboot,
+and no extra writes for a repeated disable. Version 1 journal records load with
+the indicator enabled; version 2 records preserve the new preference. Tests cover
+mixed-version sequence rollover and invalid version/flag rejection. The 4,608
+torn-write cases now also check recovery of the standby LED preference.
 
 These tests exercise production button, dimming, and journal sources. They do not
 simulate PIC special-function registers, pin voltages, PWM edge timing, electrical

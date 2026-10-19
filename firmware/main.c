@@ -15,11 +15,12 @@ void main(void)
     /* The bench image never reads or changes persistent settings. */
     restored.brightness = DIMMER_DEFAULT_PERCENT;
     restored.power_on = 0;
+    restored.standby_led_disabled = 0;
 #else
     storage_init(&restored);
 #endif
     dimmer_init(&restored);
-    hw_render(dimmer_output(), (uint8_t)!restored.power_on);
+    hw_render(dimmer_output(), dimmer_standby_led());
     for (;;) {
         if (hw_take_tick()) {
 #if !BOARD_INDICATOR_ONLY
@@ -29,9 +30,10 @@ void main(void)
             changed = dimmer_tick(&events);
             if (changed) {
 #if !BOARD_INDICATOR_ONLY
-                storage_request(dimmer_state(), changed & DIMMER_POWER_CHANGED);
+                if (changed & DIMMER_CHANGED)
+                    storage_request(dimmer_state(), changed & DIMMER_IMMEDIATE_SAVE);
 #endif
-                hw_render(dimmer_output(), (uint8_t)!dimmer_state()->power_on);
+                hw_render(dimmer_output(), dimmer_standby_led());
             }
         }
 #if !BOARD_INDICATOR_ONLY

@@ -62,7 +62,7 @@ static void drain(void)
 }
 static void save(uint8_t brightness, uint8_t power_on)
 {
-    dimmer_state_t s = {brightness, power_on};
+    dimmer_state_t s = {brightness, power_on, 0};
     storage_request(&s, 1);
     drain();
 }
@@ -72,7 +72,7 @@ static void ui_tick(uint8_t raw)
     storage_tick();
     buttons_tick(raw, &events);
     changed = dimmer_tick(&events);
-    if (changed) storage_request(dimmer_state(), changed & DIMMER_POWER_CHANGED);
+    if (changed & DIMMER_CHANGED) storage_request(dimmer_state(), changed & DIMMER_IMMEDIATE_SAVE);
     storage_service();
     if (pending) finish_write();
 }
@@ -165,6 +165,38 @@ static void test_chords(void)
     tap(BUTTON_POWER | BUTTON_BRIGHTNESS);
     state_is(60, 1);
 }
+static void test_power_long_hold_event(void)
+{
+    unsigned i;
+    button_events_t e;
+    buttons_init();
+    for (i = 0; i < BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS - 1; ++i) {
+        buttons_tick(BUTTON_POWER, &e);
+        assert(!e.long_held);
+    }
+    buttons_tick(BUTTON_POWER, &e);
+    assert(e.long_held == BUTTON_POWER);
+    for (i = 0; i < 70000; ++i) {
+        buttons_tick(BUTTON_POWER, &e);
+        assert(!e.long_held); /* No repeat or 16-bit timer wraparound. */
+    }
+    for (i = 0; i < BUTTON_DEBOUNCE_TICKS; ++i) buttons_tick(0, &e);
+    assert((e.released & BUTTON_POWER) && !(e.short_press & BUTTON_POWER));
+
+    buttons_init();
+    for (i = 0; i < BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS - 1; ++i)
+        buttons_tick(BUTTON_POWER, &e);
+    for (i = 0; i < BUTTON_DEBOUNCE_TICKS; ++i) {
+        buttons_tick(0, &e);
+        assert(!e.long_held);
+    }
+    for (i = 0; i < BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS - 1; ++i) {
+        buttons_tick(BUTTON_POWER, &e);
+        assert(!e.long_held); /* Separate presses must not accumulate time. */
+    }
+    buttons_tick(BUTTON_POWER, &e);
+    assert(e.long_held == BUTTON_POWER);
+}
 static void test_power_overlap(void)
 {
     uint8_t button, initially_on, release_order, before;
@@ -221,10 +253,69 @@ static void test_power_overlap(void)
         state_is(before, 0);
     }
 }
+static void test_standby_led_disable(void)
+{
+    unsigned before;
+    fresh();
+    assert(dimmer_standby_led());
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS - 1);
+    assert(dimmer_standby_led());
+    ui_tick(BUTTON_POWER);
+    assert(!dimmer_standby_led());
+    state_is(50, 0);
+    assert(dimmer_output() == 0 && writes == 1); /* Preference starts saving immediately. */
+    drain();
+    before = writes;
+    ui_ticks(BUTTON_POWER, 70000);
+    assert(!dimmer_standby_led());
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    state_is(50, 0);
+    assert(!dimmer_standby_led() && writes == before);
+    tap(BUTTON_POWER);
+    state_is(50, 1);
+    assert(!dimmer_standby_led());
+    tap(BUTTON_POWER);
+    state_is(50, 0);
+    assert(!dimmer_standby_led()); /* Normal on/off cycles do not re-enable it. */
+    drain();
+    before = writes;
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS + 20);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    assert(!dimmer_standby_led() && writes == before); /* Disable, never toggle. */
+    (void)boot();
+    assert(!dimmer_standby_led()); /* Preference survives power loss. */
+    assert(dimmer_state()->standby_led_disabled);
+
+    fresh();
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS - 1);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    assert(dimmer_standby_led()); /* Releasing before five seconds does nothing. */
+    state_is(50, 0);
+    tap(BUTTON_POWER);
+    drain();
+    before = writes;
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS + 20);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    state_is(50, 1);
+    assert(dimmer_output() == 512 && writes == before);
+    tap(BUTTON_POWER);
+    state_is(50, 0);
+    assert(dimmer_standby_led()); /* A five-second hold while on is ignored. */
+
+    fresh();
+    ui_ticks(BUTTON_POWER | BUTTON_UP, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS);
+    assert(!dimmer_standby_led());
+    ui_ticks(BUTTON_UP, BUTTON_DEBOUNCE_TICKS + BUTTON_RAMP_TICKS * 4);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    state_is(50, 0); /* LED control retains power-overlap cancellation. */
+    drain();
+    (void)boot();
+    assert(!dimmer_standby_led() && dimmer_state()->standby_led_disabled);
+}
 static void test_save_policy(void)
 {
     unsigned before, i;
-    dimmer_state_t s = {60, 1};
+    dimmer_state_t s = {60, 1, 0};
     fresh();
     ui_ticks(0, 2000);
     assert(writes == 0); /* Erased EEPROM is left alone. */
@@ -268,7 +359,7 @@ static void test_save_policy(void)
 }
 static void test_inflight_changes(void)
 {
-    dimmer_state_t s = {60, 1};
+    dimmer_state_t s = {60, 1, 0};
     fresh(); save(50, 1);
     storage_request(&s, 1);
     storage_service();
@@ -297,6 +388,36 @@ static void seed(unsigned slot, uint16_t seq, uint16_t duty, uint8_t flags)
     r[2] = (uint8_t)seq; r[3] = (uint8_t)(seq >> 8);
     r[4] = (uint8_t)duty; r[5] = (uint8_t)(duty >> 8);
     r[6] = flags; r[7] = reference_crc(r + 1, 6);
+}
+static void test_standby_preference_legacy_records(void)
+{
+    uint8_t original[8];
+    unsigned before;
+    fresh();
+    seed(31, 0xffff, dimmer_duty(70), 0); /* Version 1 predates the preference. */
+    memcpy(original, eeprom + 31 * 8, 8);
+    (void)boot(); state_is(70, 0);
+    assert(dimmer_standby_led() && !dimmer_state()->standby_led_disabled);
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    drain();
+    assert(eeprom[1] == 2 && eeprom[2] == 0 && eeprom[3] == 0 && eeprom[6] == 2);
+    assert(memcmp(original, eeprom + 31 * 8, 8) == 0);
+    before = writes;
+    (void)boot(); state_is(70, 0);
+    assert(!dimmer_standby_led() && dimmer_state()->standby_led_disabled);
+    ui_ticks(0, STORAGE_DELAY_TICKS + 20);
+    assert(writes == before); /* Boot migration does not write EEPROM. */
+    tap(BUTTON_POWER); drain();
+    assert(eeprom[8 + 1] == 2 && eeprom[8 + 6] == 3);
+    (void)boot(); state_is(70, 1);
+    assert(dimmer_state()->standby_led_disabled);
+    /* Unknown v2 flag bits invalidate the record even with a matching CRC. */
+    seed(2, 2, dimmer_duty(80), 4);
+    eeprom[2 * 8 + 1] = 2;
+    eeprom[2 * 8 + 7] = reference_crc(eeprom + 2 * 8 + 1, 6);
+    (void)boot(); state_is(70, 1);
+    assert(dimmer_state()->standby_led_disabled);
 }
 static void test_records_and_rotation(void)
 {
@@ -333,7 +454,7 @@ static void test_records_and_rotation(void)
     fresh(); seed(0, 1, 0, 1); (void)boot(); state_is(50, 0);
     fresh(); seed(0, 1, 1024, 1); (void)boot(); state_is(50, 0);
     fresh(); seed(0, 1, 512, 1);
-    eeprom[1] = 2; eeprom[7] = reference_crc(eeprom + 1, 6);
+    eeprom[1] = 3; eeprom[7] = reference_crc(eeprom + 1, 6);
     (void)boot(); state_is(50, 0);
 }
 
@@ -341,7 +462,7 @@ static void interrupt_matrix(uint8_t baseline_level, uint8_t baseline_on)
 {
     unsigned phase, torn, preceding;
     uint8_t baseline[256];
-    dimmer_state_t desired = {90, 0};
+    dimmer_state_t desired = {90, 0, 1};
     memcpy(baseline, eeprom, sizeof baseline);
     /* Nine writes: invalidate, seven payload bytes, final marker. For every
        write, test every possible torn byte, including the intended value. */
@@ -356,8 +477,13 @@ static void interrupt_matrix(uint8_t baseline_level, uint8_t baseline_on)
             storage_service(); assert(pending);
             eeprom[pending_address] = (uint8_t)torn;
             (void)boot();
-            if (phase == 8 && torn == 0xa5) state_is(90, 0);
-            else state_is(baseline_level, baseline_on);
+            if (phase == 8 && torn == 0xa5) {
+                state_is(90, 0);
+                assert(dimmer_state()->standby_led_disabled);
+            } else {
+                state_is(baseline_level, baseline_on);
+                assert(!dimmer_state()->standby_led_disabled);
+            }
         }
     }
     memcpy(eeprom, baseline, sizeof baseline);
@@ -368,6 +494,7 @@ static void interrupt_matrix(uint8_t baseline_level, uint8_t baseline_on)
     }
     /* Loss after commit completion, before RAM bookkeeping, also recovers. */
     (void)boot(); state_is(90, 0);
+    assert(dimmer_state()->standby_led_disabled);
 }
 static void test_power_interruption(void)
 {
@@ -382,7 +509,7 @@ static void test_failed_writes(void)
 {
     unsigned fail_index, i, before;
     uint8_t baseline[256];
-    dimmer_state_t s = {60, 0};
+    dimmer_state_t s = {60, 0, 1};
     fresh(); save(50, 1);
     memcpy(baseline, eeprom, sizeof baseline);
     for (fail_index = 0; fail_index < 9; ++fail_index) {
@@ -405,6 +532,7 @@ static void test_failed_writes(void)
         drain();
         assert(!storage_fault());
         (void)boot(); state_is(60, 0);
+        assert(dimmer_state()->standby_led_disabled);
     }
 }
 
@@ -412,13 +540,16 @@ int main(void)
 {
     test_buttons_and_dimming();
     test_chords();
+    test_power_long_hold_event();
     test_power_overlap();
+    test_standby_led_disable();
+    test_standby_preference_legacy_records();
     test_save_policy();
     test_inflight_changes();
     test_records_and_rotation();
     test_power_interruption();
     test_failed_writes();
-    puts("PASS: buttons, dimming, power overlaps, save policy, async writes, CRC, rotation, sequence rollover,");
+    puts("PASS: buttons, dimming, power overlaps, five-second standby LED disable, save policy, async writes, CRC, rotation, sequence rollover,");
     puts("      4,608 torn-write recovery cases, and EEPROM verification failures.");
     return 0;
 }

@@ -5,7 +5,8 @@
 #define SLOT_COUNT 32u
 #define RECORD_SIZE 8u
 #define COMMIT 0xa5u
-#define VERSION 1u
+#define LEGACY_VERSION 1u
+#define VERSION 2u
 #define IDLE 0u
 #define INVALIDATE 1u
 #define PAYLOAD 2u
@@ -19,7 +20,8 @@ static uint8_t record[RECORD_SIZE];
 
 static uint8_t equal(const dimmer_state_t *a, const dimmer_state_t *b)
 {
-    return a->brightness == b->brightness && a->power_on == b->power_on;
+    return a->brightness == b->brightness && a->power_on == b->power_on &&
+           a->standby_led_disabled == b->standby_led_disabled;
 }
 
 static uint8_t crc8(void)
@@ -49,12 +51,13 @@ void storage_init(dimmer_state_t *restored)
     last_slot = SLOT_COUNT - 1;
     saved.brightness = DIMMER_DEFAULT_PERCENT;
     saved.power_on = 0;
+    saved.standby_led_disabled = 0;
     for (slot = 0; slot < SLOT_COUNT; ++slot) {
         for (i = 0; i < RECORD_SIZE; ++i)
             record[i] = hal_eeprom_read((uint8_t)(slot * RECORD_SIZE + i));
         duty = (uint16_t)(record[4] | ((uint16_t)record[5] << 8));
-        if (record[0] != COMMIT || record[1] != VERSION ||
-            record[6] > 1 || record[7] != crc8() ||
+        if (record[0] != COMMIT || (record[1] != VERSION && record[1] != LEGACY_VERSION) ||
+            record[6] > (record[1] == LEGACY_VERSION ? 1u : 3u) || record[7] != crc8() ||
             duty < dimmer_duty(DIMMER_MIN_PERCENT) ||
             duty > dimmer_duty(DIMMER_MAX_PERCENT)) continue;
         candidate = (uint16_t)(record[2] | ((uint16_t)record[3] << 8));
@@ -65,7 +68,8 @@ void storage_init(dimmer_state_t *restored)
             have_saved = 1;
             /* Nearest integer percent; exact round trip for our own records. */
             saved.brightness = (uint8_t)((duty * 25u + 128u) / 256u);
-            saved.power_on = record[6];
+            saved.power_on = record[6] & 1u;
+            saved.standby_led_disabled = (record[6] >> 1) & 1u;
         }
     }
     requested = saved;
@@ -111,7 +115,7 @@ void storage_service(void)
         record[3] = (uint8_t)(next >> 8);
         record[4] = (uint8_t)duty;
         record[5] = (uint8_t)(duty >> 8);
-        record[6] = snapshot.power_on;
+        record[6] = (uint8_t)(snapshot.power_on | (snapshot.standby_led_disabled << 1));
         record[7] = crc8();
         hal_eeprom_start_write(address(0), 0);
         phase = INVALIDATE;

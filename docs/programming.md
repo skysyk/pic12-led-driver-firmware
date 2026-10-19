@@ -41,7 +41,8 @@ corresponding MiniPro aliases. A device name does not change physical adapter
 wiring; check the programmer's placement guidance for the adapter being used.
 
 EEPROM is copied back by default, preserving this firmware's saved brightness
-and power state. To start with erased EEPROM (first-run defaults: off, 50%):
+and power state, plus the standby LED preference. To start with erased EEPROM
+(first-run defaults: off, 50%, standby indicator enabled):
 
 ```powershell
 .\scripts\program.ps1 -ResetSettings
