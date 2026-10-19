@@ -2,7 +2,8 @@
 
 Implemented from the plan supplied in the project directory. An earlier controller
 image was programmed and verified on a PIC12F683 with MiniPro on 2026-10-18. The
-current nominal 38 kHz images below have been built and tested but not programmed.
+current nominal 38 kHz images with corrected active-low standby indication below
+have been built and tested but not programmed.
 No PWM waveform measurements or completed board acceptance tests are recorded.
 
 ## Target builds
@@ -13,16 +14,20 @@ Both final builds completed without warnings or errors.
 
 | Image | Program words | RAM bytes | Configuration |
 | --- | --- | --- | --- |
-| `build/led-controller.hex` | 1769 / 2048 (86.4%) | 101 / 128 (78.9%) | `0x33C4` |
-| `build/indicator-only.hex` | 1057 / 2048 (51.6%) | 65 / 128 (50.8%) | `0x33C4` |
+| `build/led-controller.hex` | 1770 / 2048 (86.4%) | 101 / 128 (78.9%) | `0x33C4` |
+| `build/indicator-only.hex` | 1058 / 2048 (51.7%) | 65 / 128 (50.8%) | `0x33C4` |
 
 The controller now targets 38 kHz: 8 MHz / (4 * 1 * 53) = 37,735.849 Hz,
 using Timer2 prescaler 1:1 and PR2=52. Each period has 212 duty counts (about
 7.7 bits of resolution). The hardware conversion scales existing logical duty
 values; the EEPROM format and saved brightness remain compatible. Static output
-still supplies exact off and full-on endpoints. Standby LED polarity is unchanged
-by this PWM update; the active-low correction identified in the reconstruction
-notes has not been applied.
+still supplies exact off and full-on endpoints. Standby LED polarity now matches
+the reconstruction notes: GP0 sinks current when the indicator is on and drives
+high when off. Initialization loads the high/off latch before enabling GP0 as an
+output. Normal standby pulls it low; operation and the saved five-second disable
+preference leave it high. Both images use the corrected polarity.
+The controller's generated assembly was checked for the high GP0 latch before
+output enable and for low/on versus high/off rendering.
 
 The HEX verification script checked record lengths/checksums, flash address bounds,
 complete 14-bit words, reset vector presence, the configuration word, and absence
@@ -33,10 +38,10 @@ SHA-256 of delivered images:
 
 ```text
 led-controller.hex
-7024a95278aa7ec3d67eba28237022a383c3eb357427257f14a02d00e0f7313f
+0108ac012b49657505f2cd801f5b19f6a3893b2bde38c5f81a3f729fb48d4cab
 
 indicator-only.hex
-8d9cd1d20c142c51bc51b311c2e0e606c9bcf9cbd1740fdc0ddaae8ca34b4f61
+ee97016a83c3f8c0edff5d6c97ae32ecd95dca73907c88d819744e9c3f6620d1
 ```
 
 ## Host tests

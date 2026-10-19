@@ -6,8 +6,9 @@ These checks are pending; compilation and host simulation cannot verify them.
    voltage, all three button traces and pressed-low voltages, and the external
    10 kΩ GP3 pull-up. Confirm GP1 can be left floating as an input.
 2. Confirm the GP2 gate path, series resistor, and gate-to-ground bias; verify that
-   the PIC drives only the gate circuit. Confirm GP0 indicator resistor and polarity.
-   Set `BOARD_PWM_ACTIVE_HIGH` and `BOARD_STANDBY_ACTIVE_HIGH` accordingly.
+   the PIC drives only the gate circuit. Confirm the indicator path from VDD via
+   ~510 Ω and the LED anode/cathode to GP0. The firmware uses active-high PWM
+   and an active-low indicator: GP0 high means off, low means on.
 3. Build and program `indicator-only.hex` into the PIC12F683 off-board using the
    TL866CS and appropriate adapter. Read back/verify the device and configuration
    word. With this image, GP2 stays inactive and EEPROM is untouched. Tap power to

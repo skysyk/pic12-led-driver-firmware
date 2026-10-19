@@ -45,8 +45,11 @@ Intervals are rounded up: debounce/ramp 20.48 ms, hold 400.384 ms, save 900.096 
 | 7 | GP0 | L3, standby indicator |
 | 8 | VSS | L4, ground |
 
-`firmware/board.h` assumes active-low buttons, active-high MOSFET drive, and an
-active-high standby indicator. Verify these assumptions against the board.
+`firmware/board.h` uses active-low buttons, active-high MOSFET drive, and an
+active-low standby indicator, matching the reconstruction notes. Wire the
+indicator as VDD → series resistor (~510 Ω) → LED anode → cathode → GP0 (pin 7).
+GP0 is high when the indicator is off and low when it is on. Verify the wiring
+against the board.
 Change the polarity constants and rebuild if needed. An inverted MOSFET circuit
 also needs an appropriate external bias to hold the load off while reset leaves
 the PIC pins as inputs; firmware cannot control the reset interval.

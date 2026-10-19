@@ -4,7 +4,8 @@
 /* QY-K4 assumptions still requiring bench verification are explicit here. */
 #define BOARD_BUTTONS_ACTIVE_LOW 1
 #define BOARD_PWM_ACTIVE_HIGH 1
-#define BOARD_STANDBY_ACTIVE_HIGH 1
+/* QY-K4 indicator cathode connects to GP0; anode goes via R7 to VDD. */
+#define BOARD_STANDBY_ACTIVE_HIGH 0
 #ifndef BOARD_INDICATOR_ONLY
 #define BOARD_INDICATOR_ONLY 0
 #endif

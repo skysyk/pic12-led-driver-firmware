@@ -38,7 +38,9 @@ void hw_init(void)
     TRISIO = 0x3f; /* Initialize latches before enabling output drivers. */
     gpio_shadow = BOARD_PWM_ACTIVE_HIGH ? 0 : BOARD_PWM_MASK;
     /* Start with standby indicator extinguished. */
-    if (!BOARD_STANDBY_ACTIVE_HIGH) gpio_shadow |= BOARD_LED_MASK;
+#if !BOARD_STANDBY_ACTIVE_HIGH
+    gpio_shadow |= BOARD_LED_MASK;
+#endif
     GPIO = gpio_shadow;
     WPU = BOARD_UP_MASK | BOARD_DOWN_MASK;
     IOC = 0;
