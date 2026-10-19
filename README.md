@@ -7,22 +7,64 @@ Physical board tests have not been performed.
 
 ## Behavior
 
-- Start off at 50% with erased/invalid EEPROM, without writing a default record.
-- Restore the most recent valid saved power state, brightness, and standby LED preference on startup.
-- Power toggles on release of a debounced short press. While in standby, hold
+- Start off in steady mode at 50%, with a 3-second breathing period, when EEPROM
+  is erased/invalid, without writing a default record.
+- Restore saved power, steady brightness, standby LED preference, breathing mode,
+  and breathing period on startup.
+- A short power press in standby turns the output on immediately. While on, a
+  single short press turns it off after the 350 ms double-press window expires;
+  two short releases within that window toggle steady/breathing mode without
+  switching the output off. While in standby, hold
   power for at least five seconds to disable the standby LED. The preference
   survives USB power loss; releasing the button does not toggle the main LEDs.
   Long power holds while the main LEDs are on do nothing.
-- Tap up/down for a 10 percentage point change; clamp between 10% and 100%.
-- Hold a brightness button for about 400 ms to start changing by 1 percentage point
+- In steady mode, tap up/down for a 10 percentage point change; clamp between 10% and 100%.
+- In steady mode, hold a brightness button for about 400 ms to start changing by 1 percentage point
   about every 20 ms. Release after a hold does not add a coarse step.
 - Brightness adjustment in standby turns the main output on, including at a limit.
 - Opposing brightness buttons cancel adjustment until both have been released.
   Power cancels overlapping brightness gestures until all brightness buttons
   have been released, including staggered releases and ongoing hold ramps.
 - Standby indicator is lit while off unless disabled, and extinguished while on.
-- Brightness saves wait 900 ms after the last actual change; power changes request
-  a save immediately, as does disabling the standby LED. Unchanged state causes no write.
+- Brightness and period saves wait 900 ms after the last change; power changes,
+  mode changes, and disabling the standby LED request an immediate save.
+  Animation alone never causes EEPROM writes. Unchanged settings cause no write.
+
+## Breathing controls
+
+The output ramps linearly between 10% and 100%, then back down. Double-press power
+while the output is on to toggle breathing. Entering starts near the saved steady
+brightness; exiting returns to that steady brightness. After power-on/restoration,
+breathing starts at its minimum. The full rise-and-fall cycle defaults to 3 seconds.
+
+While breathing, up makes the cycle 0.5 seconds longer and down makes it 0.5 seconds
+shorter. Periods wrap: up from 10 seconds selects 0.5 seconds; down from 0.5 seconds
+selects 10 seconds. A held button repeats after 400 ms, then every 20.48 ms.
+Both buttons together cancel adjustment as in steady mode. A period adjustment in
+standby wakes the saved breathing mode. The mode and period survive power loss;
+the instantaneous animation phase is not stored. Steady brightness is retained
+separately and is not changed by the animation or period buttons.
+
+The 1.024 ms timebase uses 488 ticks per half-second setting: actual nominal full
+cycles are 0.499712–9.994240 seconds, before oscillator tolerance. PWM remains
+37.736 kHz; the breathing envelope is independent of the PWM carrier.
+
+### Proposed min/max UI (not implemented)
+
+| Gesture while breathing | Proposed behavior |
+| --- | --- |
+| Hold up and down together for 1 second | Enter minimum-brightness editing; show that level steadily |
+| Tap up/down in the editor | Adjust the selected limit by 1 percentage point; hold to ramp |
+| Short power press in the editor | Switch between minimum and maximum editing; preview the selected level |
+| Hold up and down together for 1 second again | Save both limits and resume breathing |
+
+Keep minimum strictly below maximum, allowing endpoints from 0% to 100%, and
+remember both limits across power cycles. Outside the editor, up/down keep their
+period function and power keeps its normal single/double-press behavior. The
+current build has only 34 flash words free; implementing this editor and its
+persistence will require additional code-size work.
+
+## PWM and timing
 
 Logical brightness is an integer percentage. EEPROM retains the original 10-bit
 logical duty format; hardware output scales it to 212 counts per PWM period.
@@ -100,10 +142,10 @@ All 256 bytes hold 32 rotating, eight-byte records:
 | Offset | Meaning |
 | --- | --- |
 | 0 | Commit marker `0xA5`, written last |
-| 1 | Version `2` (version `1` records are also readable) |
+| 1 | Version `3` (versions `1` and `2` are also readable) |
 | 2–3 | 16-bit sequence, little-endian |
 | 4–5 | 10-bit duty, little-endian |
-| 6 | Bit 0: power on; bit 1: standby LED disabled; other bits must be zero |
+| 6 | Bit 0: power on; bit 1: standby LED disabled; bits 2–6: period steps minus one (0–19); bit 7: breathing enabled |
 | 7 | CRC-8/SMBUS over bytes 1–6: poly `0x07`, init `0`, no reflection/xorout |
 
 Boot rejects bad markers, versions, CRCs, flags, and out-of-range duties, and
@@ -112,12 +154,16 @@ span fewer than 32768 updates, as normal operation of the 32-slot ring ensures.
 Stored duties are restored to the nearest integer percentage; values generated
 by this firmware round-trip exactly.
 
-Version 1 records restore brightness and power with the standby LED enabled.
-New records use version 2 to persist the LED preference in the same eight bytes.
+Version 1 records restore brightness and power with the standby LED enabled;
+version 2 also restores the LED preference. Both restore steady mode and the
+default breathing period. New version 3 records persist mode and period in the
+same eight bytes, without changing duty encoding or journal slot locations.
+Earlier firmware cannot read version 3 records and may restore an older record
+or defaults if downgraded.
 Holding power again after disabling the indicator leaves it disabled. To enable
 it again, erase settings using `scripts/program.ps1 -ResetSettings`; this also
-resets brightness and power. The indicator-only bench image never accesses
-EEPROM, so its LED preference lasts only until power is disconnected.
+resets brightness, power, mode, and period. The indicator-only bench image never
+accesses EEPROM, so its settings last only until power is disconnected.
 
 A save snapshots the requested state, invalidates the next slot, writes and
 verifies each payload byte, then writes and verifies the final marker. It never
@@ -139,7 +185,9 @@ in the quiet window or an incomplete transaction; the previous record is retaine
 a hold, limits, long holds, chords, power priority, standby adjustment, restoration,
 write avoidance, deferred/prompt saves, power/brightness overlaps with either
 release order and held buttons, the five-second standby LED gesture and its
-persistence, legacy-record compatibility, state changes during an asynchronous write,
+persistence, breathing double-press timing, all 20 complete breathing periods,
+period wraparound and delayed saves, animation write avoidance, breathing power
+restoration, legacy-record compatibility, state changes during an asynchronous write,
 CRC corruption, invalid fields, three complete slot rotations, sequence rollover,
 and write-verification failures with retry backoff.
 

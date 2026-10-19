@@ -16,6 +16,7 @@ void main(void)
     restored.brightness = DIMMER_DEFAULT_PERCENT;
     restored.power_on = 0;
     restored.standby_led_disabled = 0;
+    restored.breath = BREATHE_DEFAULT_PERIOD;
 #else
     storage_init(&restored);
 #endif

@@ -74,14 +74,12 @@ uint8_t hw_take_tick(void)
 
 uint8_t hw_buttons(void)
 {
-    uint8_t raw = GPIO, result = 0;
+    uint8_t raw = GPIO;
 #if BOARD_BUTTONS_ACTIVE_LOW
     raw = (uint8_t)~raw;
 #endif
-    if (raw & BOARD_POWER_MASK) result |= BUTTON_POWER;
-    if (raw & BOARD_UP_MASK) result |= BUTTON_UP;
-    if (raw & BOARD_DOWN_MASK) result |= BUTTON_DOWN;
-    return result;
+    /* GP3/4/5 map consecutively to POWER/UP/DOWN bits 0/1/2. */
+    return (uint8_t)((raw >> 3) & (BUTTON_POWER | BUTTON_BRIGHTNESS));
 }
 
 void hw_render(uint16_t duty, uint8_t standby)

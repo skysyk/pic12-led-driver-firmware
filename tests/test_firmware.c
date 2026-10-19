@@ -63,7 +63,7 @@ static void drain(void)
 }
 static void save(uint8_t brightness, uint8_t power_on)
 {
-    dimmer_state_t s = {brightness, power_on, 0};
+    dimmer_state_t s = {brightness, power_on, 0, BREATHE_DEFAULT_PERIOD};
     storage_request(&s, 1);
     drain();
 }
@@ -81,10 +81,15 @@ static void ui_ticks(uint8_t raw, unsigned n)
 {
     while (n--) ui_tick(raw);
 }
-static void tap(uint8_t mask)
+static void click(uint8_t mask)
 {
     ui_ticks(mask, BUTTON_DEBOUNCE_TICKS + 30);
     ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+}
+static void tap(uint8_t mask)
+{
+    click(mask);
+    if (mask & BUTTON_POWER) ui_ticks(0, BUTTON_DOUBLE_TICKS);
 }
 static void state_is(uint8_t brightness, uint8_t power_on)
 {
@@ -233,12 +238,14 @@ static void test_power_overlap(void)
                 ui_ticks(BUTTON_POWER | button, BUTTON_DEBOUNCE_TICKS + 30);
                 if (release_order == 0) {
                     ui_ticks(button, BUTTON_DEBOUNCE_TICKS); /* Power first. */
+                    ui_ticks(button, BUTTON_DOUBLE_TICKS);
                     state_is(50, (uint8_t)!initially_on);
                 } else if (release_order == 1) {
                     ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS); /* Brightness first. */
                     state_is(50, initially_on);
                 }
                 ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+                ui_ticks(0, BUTTON_DOUBLE_TICKS);
                 state_is(50, (uint8_t)!initially_on);
                 drain();
                 committed_writes = writes;
@@ -253,6 +260,7 @@ static void test_power_overlap(void)
         fresh(); save(50, 1); (void)boot();
         ui_ticks(BUTTON_POWER | button, BUTTON_DEBOUNCE_TICKS + 30);
         ui_ticks(button, BUTTON_DEBOUNCE_TICKS);
+        ui_ticks(button, BUTTON_DOUBLE_TICKS);
         ui_ticks(button, BUTTON_HOLD_TICKS + BUTTON_RAMP_TICKS * 5);
         state_is(50, 0); /* A hold started with power cannot resume ramping. */
         ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
@@ -269,6 +277,7 @@ static void test_power_overlap(void)
                                     dimmer_state()->brightness <= before);
         before = dimmer_state()->brightness;
         ui_ticks(button, BUTTON_DEBOUNCE_TICKS);
+        ui_ticks(button, BUTTON_DOUBLE_TICKS);
         state_is(before, 0);
         ui_ticks(button, BUTTON_RAMP_TICKS * 5);
         state_is(before, 0); /* Power also cancels a ramp already in progress. */
@@ -338,7 +347,7 @@ static void test_standby_led_disable(void)
 static void test_save_policy(void)
 {
     unsigned before, i;
-    dimmer_state_t s = {60, 1, 0};
+    dimmer_state_t s = {60, 1, 0, BREATHE_DEFAULT_PERIOD};
     fresh();
     ui_ticks(0, 2000);
     assert(writes == 0); /* Erased EEPROM is left alone. */
@@ -382,7 +391,7 @@ static void test_save_policy(void)
 }
 static void test_inflight_changes(void)
 {
-    dimmer_state_t s = {60, 1, 0};
+    dimmer_state_t s = {60, 1, 0, BREATHE_DEFAULT_PERIOD};
     fresh(); save(50, 1);
     storage_request(&s, 1);
     storage_service();
@@ -412,6 +421,158 @@ static void seed(unsigned slot, uint16_t seq, uint16_t duty, uint8_t flags)
     r[4] = (uint8_t)duty; r[5] = (uint8_t)(duty >> 8);
     r[6] = flags; r[7] = reference_crc(r + 1, 6);
 }
+static void test_breathing_gesture(void)
+{
+    unsigned before;
+    fresh(); save(50, 1); (void)boot();
+    before = writes;
+    click(BUTTON_POWER);
+    state_is(50, 1); /* First click keeps output on while waiting for a double. */
+    assert(writes == before);
+    ui_ticks(0, BUTTON_DOUBLE_TICKS - 1);
+    state_is(50, 1);
+    ui_tick(0);
+    state_is(50, 0);
+    assert(writes == before + 1); /* Single power-off starts an immediate save. */
+    drain();
+
+    tap(BUTTON_POWER); /* Standby -> on is still immediate. */
+    before = writes;
+    click(BUTTON_POWER);
+    click(BUTTON_POWER);
+    state_is(50, 1);
+    assert(dimmer_state()->breath == (BREATHE_MODE | BREATHE_DEFAULT_PERIOD));
+    assert(writes > before);
+    /* Enter near the steady level instead of flashing to maximum. */
+    assert(dimmer_output() >= dimmer_duty(49) && dimmer_output() <= dimmer_duty(51));
+    drain();
+    (void)boot();
+    assert(dimmer_state()->breath == (BREATHE_MODE | BREATHE_DEFAULT_PERIOD));
+    state_is(50, 1);
+    before = writes;
+    ui_ticks(0, BREATHE_STEP_TICKS * BREATHE_DEFAULT_PERIOD * 2);
+    assert(writes == before); /* Animation itself must never write EEPROM. */
+
+    click(BUTTON_POWER);
+    click(BUTTON_POWER);
+    assert(dimmer_state()->breath == BREATHE_DEFAULT_PERIOD);
+    assert(dimmer_output() == dimmer_duty(50));
+    drain(); (void)boot();
+    assert(!(dimmer_state()->breath & BREATHE_MODE));
+    /* Late clicks are two single presses, not a mode gesture. */
+    tap(BUTTON_POWER);
+    state_is(50, 0);
+    tap(BUTTON_POWER);
+    state_is(50, 1);
+    assert(!(dimmer_state()->breath & BREATHE_MODE));
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS + 5);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS + BUTTON_DOUBLE_TICKS);
+    state_is(50, 1);
+    assert(!(dimmer_state()->breath & BREATHE_MODE));
+
+    fresh();
+    click(BUTTON_POWER); click(BUTTON_POWER);
+    ui_ticks(0, BUTTON_DOUBLE_TICKS);
+    assert(!(dimmer_state()->breath & BREATHE_MODE)); /* Gesture began in standby. */
+}
+static void test_breathing_periods(void)
+{
+    dimmer_state_t s = {50, 1, 0, BREATHE_MODE | 1u};
+    unsigned period, i, before;
+    uint16_t last, output;
+    for (period = 1; period <= BREATHE_MAX_PERIOD; ++period) {
+        fresh();
+        s.breath = (uint8_t)(BREATHE_MODE | period);
+        storage_request(&s, 1); drain(); (void)boot();
+        assert(dimmer_state()->breath == s.breath);
+        before = writes;
+        last = dimmer_output();
+        assert(last == dimmer_duty(DIMMER_MIN_PERCENT));
+        for (i = 0; i < period * BREATHE_STEP_TICKS / 2; ++i) {
+            ui_tick(0); output = dimmer_output();
+            assert(output >= last && output <= dimmer_duty(DIMMER_MAX_PERCENT));
+            last = output;
+        }
+        assert(last == dimmer_duty(DIMMER_MAX_PERCENT));
+        for (i = 0; i < period * BREATHE_STEP_TICKS / 2; ++i) {
+            ui_tick(0); output = dimmer_output();
+            assert(output <= last && output >= dimmer_duty(DIMMER_MIN_PERCENT));
+            last = output;
+        }
+        assert(last == dimmer_duty(DIMMER_MIN_PERCENT));
+        assert(writes == before);
+    }
+    /* At 10 seconds, up wraps to 0.5; down wraps back to 10. */
+    before = writes;
+    tap(BUTTON_UP);
+    assert(dimmer_state()->breath == (BREATHE_MODE | 1u));
+    assert(writes == before);
+    ui_ticks(0, STORAGE_DELAY_TICKS - 1);
+    assert(writes == before);
+    ui_tick(0);
+    assert(writes == before + 1);
+    drain();
+    tap(BUTTON_DOWN);
+    assert(dimmer_state()->breath == (BREATHE_MODE | 20u));
+    for (i = 19; i >= 1; --i) {
+        tap(BUTTON_DOWN);
+        assert(dimmer_state()->breath == (BREATHE_MODE | i));
+    }
+    state_is(50, 1); /* Period controls do not overwrite steady brightness. */
+    drain(); before = writes;
+    ui_ticks(0, STORAGE_DELAY_TICKS + 50);
+    assert(writes == before);
+    (void)boot();
+    assert(dimmer_state()->breath == (BREATHE_MODE | 1u));
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS + 5);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS + BUTTON_DOUBLE_TICKS);
+    state_is(50, 1);
+    assert(dimmer_state()->breath == (BREATHE_MODE | 1u));
+    assert(!dimmer_state()->standby_led_disabled);
+    tap(BUTTON_POWER); drain(); (void)boot();
+    state_is(50, 0);
+    assert(dimmer_state()->breath == (BREATHE_MODE | 1u));
+    tap(BUTTON_UP);
+    state_is(50, 1);
+    assert(dimmer_state()->breath == (BREATHE_MODE | 2u));
+    assert(dimmer_output() == dimmer_duty(DIMMER_MIN_PERCENT));
+    /* Power still cancels overlapping period gestures. */
+    tap(BUTTON_POWER | BUTTON_UP); drain(); (void)boot();
+    state_is(50, 0);
+    assert(dimmer_state()->breath == (BREATHE_MODE | 2u));
+    ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    drain(); (void)boot();
+    state_is(50, 0);
+    assert(dimmer_state()->breath == (BREATHE_MODE | 2u));
+    assert(dimmer_state()->standby_led_disabled);
+}
+static void test_breathing_legacy_and_validation(void)
+{
+    unsigned version, flags;
+    fresh();
+    for (version = 1; version <= 2; ++version) {
+        seed(31, 0xffff, dimmer_duty(70), (uint8_t)(version == 1 ? 1 : 3));
+        eeprom[31 * 8 + 1] = (uint8_t)version;
+        eeprom[31 * 8 + 7] = reference_crc(eeprom + 31 * 8 + 1, 6);
+        (void)boot();
+        state_is(70, 1);
+        assert(dimmer_state()->breath == BREATHE_DEFAULT_PERIOD);
+        click(BUTTON_POWER); click(BUTTON_POWER); drain();
+        assert(eeprom[1] == 3 && eeprom[2] == 0 && eeprom[3] == 0);
+        (void)boot();
+        assert(dimmer_state()->breath == (BREATHE_MODE | BREATHE_DEFAULT_PERIOD));
+        assert(dimmer_state()->standby_led_disabled == (version == 2));
+        fresh();
+    }
+    /* Reject every reserved period encoding, even with a valid CRC. */
+    for (flags = 20; flags < 32; ++flags) {
+        seed(0, 1, dimmer_duty(80), (uint8_t)((flags << 2) | 129u));
+        eeprom[1] = 3; eeprom[7] = reference_crc(eeprom + 1, 6);
+        (void)boot(); state_is(50, 0);
+        assert(dimmer_state()->breath == BREATHE_DEFAULT_PERIOD);
+    }
+}
 static void test_standby_preference_legacy_records(void)
 {
     uint8_t original[8];
@@ -424,7 +585,7 @@ static void test_standby_preference_legacy_records(void)
     ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_STANDBY_HOLD_TICKS);
     ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
     drain();
-    assert(eeprom[1] == 2 && eeprom[2] == 0 && eeprom[3] == 0 && eeprom[6] == 2);
+    assert(eeprom[1] == 3 && eeprom[2] == 0 && eeprom[3] == 0 && eeprom[6] == 22);
     assert(memcmp(original, eeprom + 31 * 8, 8) == 0);
     before = writes;
     (void)boot(); state_is(70, 0);
@@ -432,7 +593,7 @@ static void test_standby_preference_legacy_records(void)
     ui_ticks(0, STORAGE_DELAY_TICKS + 20);
     assert(writes == before); /* Boot migration does not write EEPROM. */
     tap(BUTTON_POWER); drain();
-    assert(eeprom[8 + 1] == 2 && eeprom[8 + 6] == 3);
+    assert(eeprom[8 + 1] == 3 && eeprom[8 + 6] == 23);
     (void)boot(); state_is(70, 1);
     assert(dimmer_state()->standby_led_disabled);
     /* Unknown v2 flag bits invalidate the record even with a matching CRC. */
@@ -477,7 +638,7 @@ static void test_records_and_rotation(void)
     fresh(); seed(0, 1, 0, 1); (void)boot(); state_is(50, 0);
     fresh(); seed(0, 1, 1024, 1); (void)boot(); state_is(50, 0);
     fresh(); seed(0, 1, 512, 1);
-    eeprom[1] = 3; eeprom[7] = reference_crc(eeprom + 1, 6);
+    eeprom[1] = 4; eeprom[7] = reference_crc(eeprom + 1, 6);
     (void)boot(); state_is(50, 0);
 }
 
@@ -485,7 +646,7 @@ static void interrupt_matrix(uint8_t baseline_level, uint8_t baseline_on)
 {
     unsigned phase, torn, preceding;
     uint8_t baseline[256];
-    dimmer_state_t desired = {90, 0, 1};
+    dimmer_state_t desired = {90, 0, 1, BREATHE_MODE | 20u};
     memcpy(baseline, eeprom, sizeof baseline);
     /* Nine writes: invalidate, seven payload bytes, final marker. For every
        write, test every possible torn byte, including the intended value. */
@@ -503,9 +664,11 @@ static void interrupt_matrix(uint8_t baseline_level, uint8_t baseline_on)
             if (phase == 8 && torn == 0xa5) {
                 state_is(90, 0);
                 assert(dimmer_state()->standby_led_disabled);
+                assert(dimmer_state()->breath == desired.breath);
             } else {
                 state_is(baseline_level, baseline_on);
                 assert(!dimmer_state()->standby_led_disabled);
+                assert(dimmer_state()->breath == BREATHE_DEFAULT_PERIOD);
             }
         }
     }
@@ -518,6 +681,7 @@ static void interrupt_matrix(uint8_t baseline_level, uint8_t baseline_on)
     /* Loss after commit completion, before RAM bookkeeping, also recovers. */
     (void)boot(); state_is(90, 0);
     assert(dimmer_state()->standby_led_disabled);
+    assert(dimmer_state()->breath == desired.breath);
 }
 static void test_power_interruption(void)
 {
@@ -532,7 +696,7 @@ static void test_failed_writes(void)
 {
     unsigned fail_index, i, before;
     uint8_t baseline[256];
-    dimmer_state_t s = {60, 0, 1};
+    dimmer_state_t s = {60, 0, 1, BREATHE_DEFAULT_PERIOD};
     fresh(); save(50, 1);
     memcpy(baseline, eeprom, sizeof baseline);
     for (fail_index = 0; fail_index < 9; ++fail_index) {
@@ -567,13 +731,16 @@ int main(void)
     test_power_long_hold_event();
     test_power_overlap();
     test_standby_led_disable();
+    test_breathing_gesture();
+    test_breathing_periods();
+    test_breathing_legacy_and_validation();
     test_standby_preference_legacy_records();
     test_save_policy();
     test_inflight_changes();
     test_records_and_rotation();
     test_power_interruption();
     test_failed_writes();
-    puts("PASS: PWM scaling, buttons, dimming, power overlaps, five-second standby LED disable, save policy, async writes, CRC, rotation, sequence rollover,");
+    puts("PASS: PWM scaling, buttons, dimming, breathing gestures and periods, power overlaps, five-second standby LED disable, save policy, async writes, CRC, rotation, sequence rollover,");
     puts("      4,608 torn-write recovery cases, and EEPROM verification failures.");
     return 0;
 }

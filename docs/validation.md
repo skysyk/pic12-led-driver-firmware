@@ -2,8 +2,8 @@
 
 Implemented from the plan supplied in the project directory. An earlier controller
 image was programmed and verified on a PIC12F683 with MiniPro on 2026-10-18. The
-current nominal 38 kHz images with corrected active-low standby indication below
-have been built and tested but not programmed.
+current nominal 38 kHz images with active-low standby indication and persistent
+breathing mode below have been built and tested but not programmed.
 No PWM waveform measurements or completed board acceptance tests are recorded.
 
 ## Target builds
@@ -14,13 +14,13 @@ Both final builds completed without warnings or errors.
 
 | Image | Program words | RAM bytes | Configuration |
 | --- | --- | --- | --- |
-| `build/led-controller.hex` | 1770 / 2048 (86.4%) | 101 / 128 (78.9%) | `0x33C4` |
-| `build/indicator-only.hex` | 1058 / 2048 (51.7%) | 65 / 128 (50.8%) | `0x33C4` |
+| `build/led-controller.hex` | 2014 / 2048 (98.3%) | 113 / 128 (88.3%) | `0x33C4` |
+| `build/indicator-only.hex` | 1259 / 2048 (61.5%) | 78 / 128 (60.9%) | `0x33C4` |
 
 The controller now targets 38 kHz: 8 MHz / (4 * 1 * 53) = 37,735.849 Hz,
 using Timer2 prescaler 1:1 and PR2=52. Each period has 212 duty counts (about
 7.7 bits of resolution). The hardware conversion scales existing logical duty
-values; the EEPROM format and saved brightness remain compatible. Static output
+values; saved brightness remains compatible with previous firmware. Static output
 still supplies exact off and full-on endpoints. Standby LED polarity now matches
 the reconstruction notes: GP0 sinks current when the indicator is on and drives
 high when off. Initialization loads the high/off latch before enabling GP0 as an
@@ -28,6 +28,21 @@ output. Normal standby pulls it low; operation and the saved five-second disable
 preference leave it high. Both images use the corrected polarity.
 The controller's generated assembly was checked for the high GP0 latch before
 output enable and for low/on versus high/off rendering.
+
+Breathing uses a 256-phase linear triangle envelope and keeps the steady brightness
+separate. Period settings 1..20 use 488 Timer0 ticks per half-second step, giving
+0.499712..9.994240 seconds per complete rise-and-fall cycle. Double-clicking power
+while on toggles mode; single-click off waits for a 350.208 ms recognition window.
+Periods wrap in both directions, and power priority still cancels overlapping
+brightness/period gestures. Mode changes save immediately and period changes
+save after the usual quiet window. Animation flags request rendering only.
+
+Version 3 keeps the 32-slot journal and existing 10-bit duty encoding. The former
+spare flag bits store period-minus-one (bits 2..6) and breathing mode (bit 7).
+Version 1/2 records load in steady mode with a 3-second default period. A bytewise
+comparison of the four-byte settings structure and smaller PWM/button arithmetic
+keep the feature within flash/RAM. Only 34 flash words remain; the proposed bounds
+editor has not been implemented. Physical breathing/timing acceptance is pending.
 
 The HEX verification script checked record lengths/checksums, flash address bounds,
 complete 14-bit words, reset vector presence, the configuration word, and absence
@@ -38,10 +53,10 @@ SHA-256 of delivered images:
 
 ```text
 led-controller.hex
-0108ac012b49657505f2cd801f5b19f6a3893b2bde38c5f81a3f729fb48d4cab
+bd7dc4d6fbdd2ca6ffe962037d637370ba14e6eb43efcab3698ca033324b3fa6
 
 indicator-only.hex
-ee97016a83c3f8c0edff5d6c97ae32ecd95dca73907c88d819744e9c3f6620d1
+b7f033d4a4db99ab251b97f8bde1a5ad8ff51d70a16c0a91c4decae7c5096606
 ```
 
 ## Host tests
@@ -54,7 +69,16 @@ permits writes to stay busy across repeated foreground service calls.
 PWM tests compare all 1,024 logical duty values against independent wide-arithmetic
 scaling, check 10%/50%/100% results, and verify that every 1% brightness adjustment
 maps to a distinct hardware duty. Existing EEPROM round-trip and legacy record
-tests pass without changes to storage encoding.
+tests still pass with the unchanged duty encoding.
+
+Breathing tests check the first-click delay, double-click mode entry/exit without
+power cycling, late clicks, standby and long-hold behavior, monotonic rise/fall
+and both endpoints for all 20 exact tick periods, period wraparound, retained
+steady brightness, delayed period saves, mode/power/preference restoration,
+legacy v1/v2 migration through sequence rollover, invalid period rejection, and
+no EEPROM writes during repeated animation cycles. The torn-write matrix also
+checks restoration of mode and period in addition to brightness, power, and LED
+preference.
 
 Power-priority regression tests cover up/down, initial on/off state, either
 staggered release order and simultaneous release, a continued hold after power

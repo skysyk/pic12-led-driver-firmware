@@ -34,3 +34,22 @@ These checks are pending; compilation and host simulation cannot verify them.
    Interrupt USB during commits and confirm fallback to a valid older record.
 8. Only after these checks, solder the production part into the board. Retain an
    off-board programming route: existing circuit components can interfere with ICSP.
+
+## Breathing mode acceptance
+
+- While output is on, double-press power within 350 ms: output must remain on and
+  begin rising/falling between 10% and 100%. Double-press again to restore the
+  steady brightness. A single press must turn off after the double-press window;
+  long holds while on must not disable the standby indicator.
+- Tap up/down to traverse all 20 periods, including wraparound at 0.5/10 seconds.
+  Scope complete rise-and-fall cycles, including 0.499712 and 9.994240 seconds
+  nominally, and verify the 37.736 kHz carrier is unchanged. Check smoothness at
+  both extremes and button response while the animation and EEPROM writes run.
+- Confirm both-button cancellation and power priority during period changes.
+  A brightness button in standby must wake the saved breathing mode and adjust
+  its period, without changing steady brightness.
+- Change period, wait at least one second, and cycle USB. Check mode/period,
+  steady brightness, power state, and standby LED preference all restore. Check
+  startup with existing version 1/2 journals; mode should default to steady and
+  period to 3 seconds until changed. Animation must not create journal entries.
+- Minimum/maximum editing is a UI proposal only; current bounds remain 10–100%.

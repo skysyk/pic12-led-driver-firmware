@@ -6,7 +6,7 @@
 #define RECORD_SIZE 8u
 #define COMMIT 0xa5u
 #define LEGACY_VERSION 1u
-#define VERSION 2u
+#define VERSION 3u
 #define IDLE 0u
 #define INVALIDATE 1u
 #define PAYLOAD 2u
@@ -20,8 +20,10 @@ static uint8_t record[RECORD_SIZE];
 
 static uint8_t equal(const dimmer_state_t *a, const dimmer_state_t *b)
 {
-    return a->brightness == b->brightness && a->power_on == b->power_on &&
-           a->standby_led_disabled == b->standby_led_disabled;
+    const uint8_t *x = (const uint8_t *)a, *y = (const uint8_t *)b;
+    uint8_t n = sizeof *a;
+    do { if (*x++ != *y++) return 0; } while (--n);
+    return 1;
 }
 
 static uint8_t crc8(void)
@@ -52,14 +54,17 @@ void storage_init(dimmer_state_t *restored)
     saved.brightness = DIMMER_DEFAULT_PERCENT;
     saved.power_on = 0;
     saved.standby_led_disabled = 0;
+    saved.breath = BREATHE_DEFAULT_PERIOD;
     for (slot = 0; slot < SLOT_COUNT; ++slot) {
         for (i = 0; i < RECORD_SIZE; ++i)
             record[i] = hal_eeprom_read((uint8_t)(slot * RECORD_SIZE + i));
         duty = (uint16_t)(record[4] | ((uint16_t)record[5] << 8));
-        if (record[0] != COMMIT || (record[1] != VERSION && record[1] != LEGACY_VERSION) ||
-            record[6] > (record[1] == LEGACY_VERSION ? 1u : 3u) || record[7] != crc8() ||
-            duty < dimmer_duty(DIMMER_MIN_PERCENT) ||
-            duty > dimmer_duty(DIMMER_MAX_PERCENT)) continue;
+        if (record[0] != COMMIT || record[1] < LEGACY_VERSION || record[1] > VERSION ||
+            (record[1] != VERSION && record[6] > (record[1] == LEGACY_VERSION ? 1u : 3u)) ||
+            record[7] != crc8()) continue;
+        if (duty < (uint16_t)((DIMMER_MIN_PERCENT * 1023UL + 50u) / 100u) ||
+            duty > (uint16_t)((DIMMER_MAX_PERCENT * 1023UL + 50u) / 100u) ||
+            (record[1] == VERSION && ((record[6] >> 2) & 31u) >= BREATHE_MAX_PERIOD)) continue;
         candidate = (uint16_t)(record[2] | ((uint16_t)record[3] << 8));
         difference = (uint16_t)(candidate - sequence);
         if (!have_saved || (difference != 0 && difference < 0x8000u)) {
@@ -70,6 +75,10 @@ void storage_init(dimmer_state_t *restored)
             saved.brightness = (uint8_t)((duty * 25u + 128u) / 256u);
             saved.power_on = record[6] & 1u;
             saved.standby_led_disabled = (record[6] >> 1) & 1u;
+            saved.breath = BREATHE_DEFAULT_PERIOD;
+            if (record[1] == VERSION)
+                saved.breath = (uint8_t)((record[6] & BREATHE_MODE) |
+                    (((record[6] >> 2) & BREATHE_PERIOD_MASK) + 1u));
         }
     }
     requested = saved;
@@ -115,7 +124,8 @@ void storage_service(void)
         record[3] = (uint8_t)(next >> 8);
         record[4] = (uint8_t)duty;
         record[5] = (uint8_t)(duty >> 8);
-        record[6] = (uint8_t)(snapshot.power_on | (snapshot.standby_led_disabled << 1));
+        record[6] = (uint8_t)(snapshot.power_on | (uint8_t)(snapshot.standby_led_disabled << 1) |
+            (((snapshot.breath & BREATHE_PERIOD_MASK) - 1u) << 2) | (snapshot.breath & BREATHE_MODE));
         record[7] = crc8();
         hal_eeprom_start_write(address(0), 0);
         phase = INVALIDATE;
