@@ -147,8 +147,8 @@ static void test_buttons_and_dimming(void)
     tap(BUTTON_DOWN);
     state_is(50, 1);
     for (i = 0; i < 20; ++i) tap(BUTTON_DOWN);
-    state_is(10, 1);
-    for (i = 0; i < 9; ++i) tap(BUTTON_UP);
+    state_is(0, 1); assert(dimmer_output() == 1);
+    for (i = 0; i < 10; ++i) tap(BUTTON_UP);
     state_is(100, 1);
     tap(BUTTON_UP);
     state_is(100, 1);
@@ -166,12 +166,14 @@ static void test_buttons_and_dimming(void)
     assert(!(events.short_press & BUTTON_UP));
     state_is(55, 1);
     ui_ticks(BUTTON_DOWN, 70000); /* No long-hold counter overflow/retrigger. */
-    state_is(10, 1);
+    state_is(0, 1);
     ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
-    state_is(10, 1);
+    state_is(0, 1);
 
     tap(BUTTON_POWER);
-    state_is(10, 0);
+    state_is(0, 0);
+    tap(BUTTON_UP);
+    state_is(10, 1);
     tap(BUTTON_UP);
     state_is(20, 1); /* Adjusting in standby turns on. */
     tap(BUTTON_POWER);
@@ -617,7 +619,11 @@ static void test_editor_bounds_and_ramping(void)
     assert(dimmer_state()->maximum == 1 && dimmer_output() == dimmer_duty(1));
     tap(BUTTON_POWER);
     tap(BUTTON_UP);
-    assert(dimmer_state()->minimum == 0); /* Cannot equal/cross the upper bound. */
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    tap(BUTTON_UP); /* A 1% maximum still permits only off or the one-count floor. */
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    tap(BUTTON_DOWN);
+    assert(dimmer_state()->minimum == 0);
     tap(BUTTON_POWER);
     ui_ticks(BUTTON_UP, BUTTON_DEBOUNCE_TICKS + BUTTON_HOLD_TICKS - 1);
     assert(dimmer_state()->maximum == 1);
@@ -679,6 +685,8 @@ static void test_all_editor_ranges(void)
                     int ceiling = selection == 1 ? (int)high - 1 : 100;
                     if (expected < floor) expected = floor;
                     if (expected > ceiling) expected = ceiling;
+                    if (selection == 1 && ((!low && direction) || (low && !expected)))
+                        expected = DIMMER_LOWEST;
                     s.minimum = (uint8_t)low; s.maximum = (uint8_t)high;
                     dimmer_init(&s); e.down = BUTTON_BRIGHTNESS;
                     for (i = 0; i < BUTTON_EDITOR_TICKS; ++i) (void)dimmer_tick(&e);
@@ -686,7 +694,7 @@ static void test_all_editor_ranges(void)
                     if (selection == 2) { e.short_press = BUTTON_POWER; (void)dimmer_tick(&e); }
                     e.short_press = direction ? BUTTON_UP : BUTTON_DOWN;
                     (void)dimmer_tick(&e);
-                    assert(dimmer_state()->minimum < dimmer_state()->maximum);
+                    assert((dimmer_state()->minimum & 127u) < dimmer_state()->maximum);
                     assert(dimmer_state()->maximum <= 100);
                     assert((selection == 1 ? dimmer_state()->minimum : dimmer_state()->maximum) == expected);
                 }
@@ -781,7 +789,7 @@ static void test_sine_timing_and_entry(void)
     for (low = 0; low < 100; ++low) {
         for (high = low + 1; high <= 100; ++high) {
             s.minimum = (uint8_t)low; s.maximum = (uint8_t)high;
-            for (brightness = 10; brightness <= 100; ++brightness) {
+            for (brightness = 1; brightness <= 100; ++brightness) {
                 s.brightness = (uint8_t)brightness; dimmer_init(&s);
                 (void)dimmer_tick(&e);
                 target = brightness < low ? low : brightness > high ? high : brightness;
@@ -849,6 +857,247 @@ static void test_v4_validation(void)
     fresh(); memcpy(eeprom + 8, valid, sizeof valid);
     (void)boot(); state_is(50, 0); /* v4 is valid only on 16-byte boundaries. */
 }
+static void test_smooth_steady_ramp(void)
+{
+    dimmer_state_t s = {10, 1, BREATHE_DEFAULT_PERIOD, 10, 100};
+    unsigned initial, power, direction, repeat, expected, level, before;
+    /* Independent transition oracle for every steady setting and both gestures. */
+    for (initial = 0; initial <= 100; ++initial) {
+        for (power = 0; power < 2; ++power) {
+            for (direction = 0; direction < 2; ++direction) {
+                for (repeat = 0; repeat < 2; ++repeat) {
+                    button_events_t e = {0};
+                    uint8_t result;
+                    s.brightness = (uint8_t)initial; s.power_on = (uint8_t)power;
+                    dimmer_init(&s);
+                    if (repeat) e.repeat = direction ? BUTTON_UP : BUTTON_DOWN;
+                    else e.short_press = direction ? BUTTON_UP : BUTTON_DOWN;
+                    if (repeat) expected = direction ? (initial < 100 ? initial + 1 : 100) :
+                                                      (initial ? initial - 1 : 0);
+                    else if (direction) expected = !initial ? 10 : initial < 90 ? initial + 10 : 100;
+                    else expected = initial <= 10 ? 0 : initial < 20 ? 10 : initial - 10;
+                    result = dimmer_tick(&e);
+                    state_is((uint8_t)expected, 1);
+                    assert(dimmer_output() == (expected ? expected * 4 : 1));
+                    assert(!!(result & DIMMER_CHANGED) == (!power || expected != initial));
+                    assert(!!(result & DIMMER_POWER_CHANGED) == !power);
+                }
+            }
+        }
+    }
+    fresh(); save(12, 1); (void)boot();
+    ui_ticks(BUTTON_DOWN, BUTTON_DEBOUNCE_TICKS + BUTTON_HOLD_TICKS);
+    state_is(11, 1);
+    for (level = 10; level > 0; --level) {
+        ui_ticks(BUTTON_DOWN, BUTTON_RAMP_TICKS - 1); state_is((uint8_t)(level + 1), 1);
+        ui_tick(BUTTON_DOWN); state_is((uint8_t)level, 1);
+        assert(dimmer_output() == level * 4);
+    }
+    ui_ticks(BUTTON_DOWN, BUTTON_RAMP_TICKS); state_is(0, 1); assert(dimmer_output() == 1);
+    ui_ticks(BUTTON_DOWN, 2000); ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    state_is(0, 1); assert(dimmer_output() == 1);
+    before = writes; tap(BUTTON_DOWN); ui_ticks(0, STORAGE_DELAY_TICKS + 20);
+    assert(writes == before);
+    tap(BUTTON_UP); state_is(10, 1);
+    tap(BUTTON_DOWN); state_is(0, 1); /* Taps retain the direct jump. */
+    ui_ticks(BUTTON_UP, BUTTON_DEBOUNCE_TICKS + BUTTON_HOLD_TICKS);
+    state_is(1, 1);
+    for (level = 2; level <= 11; ++level) {
+        ui_ticks(BUTTON_UP, BUTTON_RAMP_TICKS); state_is((uint8_t)level, 1);
+    }
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS); state_is(11, 1);
+    for (level = 1; level <= 9; ++level) {
+        fresh(); save(10, 1); (void)boot();
+        ui_ticks(BUTTON_DOWN, BUTTON_DEBOUNCE_TICKS + BUTTON_HOLD_TICKS +
+                               (9u - level) * BUTTON_RAMP_TICKS);
+        ui_ticks(0, BUTTON_DEBOUNCE_TICKS); state_is((uint8_t)level, 1);
+        ui_ticks(0, STORAGE_DELAY_TICKS + 20); (void)boot();
+        state_is((uint8_t)level, 1); assert(dimmer_output() == level * 4);
+        tap(BUTTON_POWER); drain(); (void)boot();
+        state_is((uint8_t)level, 0); assert(!dimmer_output());
+        tap(BUTTON_POWER); drain(); (void)boot();
+        state_is((uint8_t)level, 1);
+        hold_mode(); assert(dimmer_output() >= 40);
+        hold_mode(); state_is((uint8_t)level, 1); assert(dimmer_output() == level * 4);
+        tap(BUTTON_DOWN); state_is(0, 1); /* A low saved level cannot jump upward on Down. */
+    }
+}
+static void test_lowest_step_controls(void)
+{
+    dimmer_state_t s = {0, 1, BREATHE_MODE | 6u, 10, 100};
+    unsigned before;
+    fresh(); save(10, 1); (void)boot();
+    tap(BUTTON_DOWN); state_is(0, 1); assert(dimmer_output() == 1);
+    ui_ticks(0, STORAGE_DELAY_TICKS + 20); (void)boot();
+    state_is(0, 1); assert(dimmer_output() == 1);
+    before = writes;
+    ui_ticks(BUTTON_DOWN, 70000); ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    state_is(0, 1); assert(dimmer_output() == 1 && writes == before);
+    tap(BUTTON_DOWN); state_is(0, 1); assert(dimmer_output() == 1);
+    tap(BUTTON_POWER); drain(); (void)boot();
+    state_is(0, 0); assert(!dimmer_output());
+    tap(BUTTON_POWER); drain(); (void)boot();
+    state_is(0, 1); assert(dimmer_output() == 1);
+    ui_ticks(BUTTON_UP, BUTTON_DEBOUNCE_TICKS + BUTTON_HOLD_TICKS);
+    state_is(1, 1); assert(dimmer_output() == 4);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    tap(BUTTON_DOWN); state_is(0, 1);
+    hold_mode(); assert(dimmer_output() >= 40);
+    hold_mode(); state_is(0, 1); assert(dimmer_output() == 1);
+
+    fresh(); storage_request(&s, 1); drain(); (void)boot();
+    editor_gesture(); before = writes;
+    tap(BUTTON_DOWN);
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    tap(BUTTON_UP); assert(dimmer_state()->minimum == 10);
+    /* Any number of repeats, including a second complete hold, stops above off. */
+    ui_ticks(BUTTON_DOWN, 70000); ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    ui_ticks(BUTTON_DOWN, 70000); ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    assert(writes == before); /* Editor repeats never save or turn off. */
+    tap(BUTTON_DOWN); assert(!dimmer_state()->minimum && !dimmer_output());
+    ui_ticks(BUTTON_DOWN, 1000); ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    assert(!dimmer_state()->minimum && !dimmer_output());
+    tap(BUTTON_UP);
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    tap(BUTTON_DOWN);
+    ui_ticks(BUTTON_UP, BUTTON_DEBOUNCE_TICKS + BUTTON_HOLD_TICKS);
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    ui_ticks(BUTTON_UP, BUTTON_RAMP_TICKS);
+    assert(dimmer_state()->minimum == 1 && dimmer_output() == 4);
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    tap(BUTTON_DOWN);
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    /* An unfinished edit still restores the last confirmed percentage. */
+    (void)boot(); assert(dimmer_state()->minimum == 10);
+    editor_gesture(); tap(BUTTON_DOWN); editor_gesture(); drain(); (void)boot();
+    assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+    state_is(0, 1);
+    hold_mode(); state_is(0, 1); assert(dimmer_output() == 1);
+}
+static void test_lowest_breathing_ranges(void)
+{
+    dimmer_state_t s = {0, 1, BREATHE_MODE | 6u, DIMMER_LOWEST, 100};
+    button_events_t e = {0};
+    uint8_t seen[BOARD_PWM_PERIOD + 1];
+    unsigned high, period, tick, ticks, duty, i;
+    for (high = 1; high <= 100; ++high) {
+        s.maximum = (uint8_t)high;
+        for (period = 1; period <= 20; ++period) {
+            s.breath = (uint8_t)(BREATHE_MODE | period);
+            dimmer_init(&s); memset(seen, 0, sizeof seen);
+            ticks = period * BREATHE_STEP_TICKS;
+            for (tick = 0; tick < ticks; ++tick) {
+                duty = dimmer_output(); assert(duty >= 1 && duty <= high * 4);
+                if (period == 20) {
+                    int ideal = 1 + (int)(reference_sine(dimmer_phase()) * (high * 4 - 1) + 0.5);
+                    int error = (int)duty - ideal;
+                    assert(error >= -3 && error <= 3);
+                }
+                seen[duty] = 1; (void)dimmer_tick(&e);
+            }
+            assert(!dimmer_phase() && seen[1] && seen[high * 4]);
+            if (period >= 3) for (duty = 1; duty <= high * 4; ++duty) assert(seen[duty]);
+        }
+        /* Maximum edits must remain strictly above the one-count minimum. */
+        fresh(); storage_request(&s, 1); drain(); (void)boot();
+        editor_gesture(); tap(BUTTON_POWER);
+        ui_ticks(BUTTON_DOWN, 10000); ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+        assert(dimmer_state()->maximum == 1 && dimmer_output() == 4);
+        tap(BUTTON_POWER);
+        for (i = 0; i < 3; ++i) {
+            tap(BUTTON_UP);
+            assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+        }
+        ui_ticks(BUTTON_UP, 1000); ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+        assert(dimmer_state()->minimum == DIMMER_LOWEST && dimmer_output() == 1);
+        tap(BUTTON_DOWN); assert(!dimmer_state()->minimum && !dimmer_output());
+        tap(BUTTON_UP); assert(dimmer_state()->minimum == DIMMER_LOWEST);
+        for (i = 0; i <= 100; ++i) {
+            int error, target;
+            s.brightness = (uint8_t)i; s.maximum = (uint8_t)high;
+            s.breath = BREATHE_DEFAULT_PERIOD; dimmer_init(&s);
+            e.held = BUTTON_POWER; (void)dimmer_tick(&e); e.held = 0;
+            target = i ? (int)(i < high ? i : high) * 4 : 1;
+            error = (int)dimmer_output() - target;
+            assert(error >= -3 && error <= 3);
+        }
+    }
+}
+static void test_v5_validation(void)
+{
+    dimmer_state_t s = {0, 1, BREATHE_MODE | 20u, DIMMER_LOWEST, 100};
+    uint8_t valid[10];
+    unsigned offset, bit, field, value;
+    fresh(); storage_request(&s, 1); drain();
+    assert(eeprom[1] == 5); memcpy(valid, eeprom, sizeof valid);
+    for (offset = 0; offset < sizeof valid; ++offset) {
+        for (bit = 0; bit < 8; ++bit) {
+            memcpy(eeprom, valid, sizeof valid); eeprom[offset] ^= (uint8_t)(1u << bit);
+            (void)boot(); state_is(50, 0);
+        }
+    }
+    for (field = 4; field <= 7; ++field) {
+        for (value = 0; value < 256; ++value) {
+            unsigned brightness, minimum, maximum, period;
+            memcpy(eeprom, valid, sizeof valid); eeprom[field] = (uint8_t)value;
+            eeprom[8] = reference_crc(eeprom + 1, 7);
+            brightness = eeprom[4] & 127u; minimum = eeprom[5];
+            maximum = eeprom[6] & 127u; period = eeprom[7];
+            (void)boot();
+            if (brightness <= 100 &&
+                (minimum <= 100 || minimum == DIMMER_LOWEST) &&
+                (minimum & 127u) < maximum && maximum <= 100 && period >= 1 && period <= 20) {
+                state_is((uint8_t)brightness, eeprom[4] >> 7);
+                assert(dimmer_state()->minimum == minimum && dimmer_state()->maximum == maximum);
+                assert(dimmer_state()->breath == ((eeprom[6] & 128u) | period));
+            } else state_is(50, 0);
+        }
+    }
+}
+static unsigned lowest_interruption_cases;
+static void test_lowest_settings_interruption(void)
+{
+    const dimmer_state_t states[] = {
+        {70, 1, BREATHE_MODE | 20u, 0, 100},
+        {0, 1, BREATHE_MODE | 1u, DIMMER_LOWEST, 1},
+        {0, 0, BREATHE_MODE | 6u, 0, 100},
+        {7, 1, BREATHE_DEFAULT_PERIOD, 0, 100}
+    };
+    uint8_t image[256];
+    unsigned kind, slot, phase, tear, preceding, j;
+    const unsigned state_count = sizeof states / sizeof states[0];
+    for (kind = 0; kind < state_count; ++kind) {
+        for (slot = 0; slot < 16; ++slot) {
+            unsigned limit = slot == 15 ? 256 : 3;
+            fresh();
+            for (j = 0; j < 16; ++j) {
+                seed_v4(j, (uint16_t)(0xffffu - ((slot + 16u - j) % 16u)), &states[kind]);
+                if (kind) eeprom[j * 16 + 1] = 5;
+                else eeprom[j * 16 + 5] |= 128u; /* Old off preference stays off. */
+                eeprom[j * 16 + 8] = reference_crc(eeprom + j * 16 + 1, 7);
+            }
+            (void)boot(); settings_are(&states[kind]); memcpy(image, eeprom, sizeof image);
+            for (phase = 0; phase < 11; ++phase) {
+                for (tear = 0; tear < limit; ++tear) {
+                    uint8_t torn = limit == 256 ? (uint8_t)tear :
+                                   (uint8_t)(tear == 0 ? 0 : tear == 1 ? 0xff : 0xa5);
+                    memcpy(eeprom, image, sizeof image); (void)boot();
+                    storage_request(&states[(kind + 1) % state_count], 1);
+                    for (preceding = 0; preceding < phase; ++preceding) {
+                        storage_service(); assert(pending);
+                        assert(pending_address / 16 != slot); finish_write();
+                    }
+                    storage_service(); assert(pending); assert(pending_address / 16 != slot);
+                    eeprom[pending_address] = torn; (void)boot();
+                    settings_are(&states[phase == 10 && torn == 0xa5 ? (kind + 1) % state_count : kind]);
+                    ++lowest_interruption_cases;
+                }
+            }
+        }
+    }
+}
 static unsigned migration_cases;
 static void settings_are(const dimmer_state_t *s)
 {
@@ -903,7 +1152,7 @@ static void test_legacy_migration_interruption(void)
             storage_request(&desired, 1); drain(); (void)boot(); settings_are(&desired);
         }
     }
-    /* Once a full v4 rotation completes, every legacy odd-slot version is
+    /* Once a full current-format rotation completes, every legacy odd-slot version is
        destroyed. A CRC byte equal to its old commit marker cannot revive it. */
     for (j = 0; j < 16; ++j) {
         desired.brightness = (uint8_t)(80 + (j & 1u));
@@ -1121,7 +1370,7 @@ static void test_breathing_legacy_and_validation(void)
         state_is(70, 1);
         assert(dimmer_state()->breath == BREATHE_DEFAULT_PERIOD);
         hold_mode(); drain();
-        assert(eeprom[1] == 4 && eeprom[2] == 0 && eeprom[3] == 0);
+        assert(eeprom[1] == 5 && eeprom[2] == 0 && eeprom[3] == 0);
         (void)boot();
         assert(dimmer_state()->breath == (BREATHE_MODE | BREATHE_DEFAULT_PERIOD));
         assert(!dimmer_status_led());
@@ -1312,6 +1561,11 @@ int main(void)
     test_custom_bounds_mode_entry();
     test_all_editor_ranges();
     test_v4_validation();
+    test_v5_validation();
+    test_smooth_steady_ramp();
+    test_lowest_step_controls();
+    test_lowest_breathing_ranges();
+    test_lowest_settings_interruption();
     test_legacy_migration_interruption();
     test_breathing_gesture();
     test_mode_change_flash();
@@ -1327,5 +1581,7 @@ int main(void)
     test_failed_writes();
     puts("PASS: PWM scaling, breathing, editor/status LED, all 5,050 valid min/max pairs, six-second reset, power overlaps, save policy, CRC, and rotation.");
     printf("      5,632 journal, %u migration, and 2,816 reset torn-write cases; EEPROM verification failures.\n", migration_cases);
+    printf("      Lowest-step controls, 2,000 breathing ranges/periods, v4/v5 validation, and %u additional torn writes.\n", lowest_interruption_cases);
+    puts("      Smooth steady ramps, all 808 step/hold transitions, and 1-9% power-cycle restoration.");
     return 0;
 }

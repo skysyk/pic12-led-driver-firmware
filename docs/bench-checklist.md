@@ -18,6 +18,15 @@ These checks are pending; compilation and host simulation cannot verify them.
    EEPROM, confirm GP2 is inactive at boot and the status LED stays off normally.
    Scope 10%, 50%, and 100% commands; intermediate PWM should be about 20 kHz,
    maximum should be a static active level, and off a static inactive level.
+   In steady mode, tap Down from 10% to select one PWM count (0.25% duty), then
+   confirm further Down taps/holds stay there and an Up tap returns to 10%.
+   Hold Down from 12% and check every 1% level through 10%, 9%, ... 1%, then
+   0.25%, with no jump at 10% and no extra step on release. Holding Up from 0.25%
+   must start at 1% and rise smoothly. Save each level from 1% through 9%, cycle
+   power, and confirm brightness and saved on/off state restore. With sufficient
+   scope bandwidth, expect nominal 125 ns pulses every 50 us at the one-count
+   level; verify the actual MOSFET/load response separately. Power cycling must
+   restore this level and the saved on/off state.
 5. Reconnect the load with a suitable current-limited supply. Check taps, holds,
    both limits, power priority with staggered releases and a held brightness
    button, opposing-button cancellation, standby restoration,
@@ -75,6 +84,12 @@ These checks are pending; compilation and host simulation cannot verify them.
   brightness. Selecting minimum returns to solid indication. Up/down taps change by 10 percentage
   points, holds ramp by 1% without crossing the other limit. Test 0% minimum and
   100% maximum, a one-point range, and coarse steps near either boundary.
+  Both Down taps and a continuous hold must land at the extra one-count minimum
+  before off. Keep holding past that level, release, and hold again: it must
+  remain at one count. Only a separate Down tap may select off. Up from off must
+  select one count first. With a 1% maximum, Up must not turn the minimum off or
+  cross the maximum. Save/restore the one-count minimum and confirm breathing
+  never reaches an off frame when this minimum is selected.
   Power taps/holds in the editor must not turn off or change breathing mode.
   Test adjustments and selection changes during a dark indicator phase. Blinking
   must remain responsive and must not cause EEPROM writes.

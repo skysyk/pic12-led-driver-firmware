@@ -48,11 +48,13 @@
 #define BREATHE_PERIOD_MASK 31u
 #define STORAGE_DELAY_TICKS TICKS_FROM_MS(900)
 #define STORAGE_RETRY_TICKS TICKS_FROM_MS(1000)
-#define DIMMER_MIN_PERCENT 10u
+#define DIMMER_MIN_PERCENT 10u /* Coarse-step boundary and v1-v4 restore limit. */
 #define DIMMER_MAX_PERCENT 100u
 #define DIMMER_DEFAULT_PERCENT 50u
 #define DIMMER_STEP_PERCENT 10u
 #define DIMMER_RAMP_PERCENT 1u
+/* Minimum-editor sentinel: one PWM count, between 0% and 1%. */
+#define DIMMER_LOWEST 128u
 
 #if DIMMER_MIN_PERCENT < 1 || DIMMER_MAX_PERCENT > 100 || DIMMER_MIN_PERCENT >= DIMMER_MAX_PERCENT
 #error Invalid brightness limits

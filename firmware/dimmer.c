@@ -23,19 +23,19 @@ static const uint8_t sine_quarter[9] = {
     0, 5, 19, 43, 75, 114, 158, 206, 0
 };
 
-/* Rising half only, phase 0..1024. */
+/* Full cycle, phase 0..2047; inverse mode-entry searches use the rising half. */
 static uint16_t sine_level(uint16_t phase)
 {
     uint8_t index, base, invert;
+    if (phase & 1024u) phase = BREATHE_PHASE_STEPS - phase;
     invert = phase > 512u;
     if (invert) phase = 1024u - phase;
     index = (uint8_t)(phase >> 6);
     if (index == 8u) return 256u;
     base = sine_quarter[index];
     phase &= 63u;
-    if (phase)
-        base += (uint8_t)(((uint16_t)(uint8_t)(sine_quarter[index + 1u] - base) *
-                           phase + 32u) >> 6);
+    base += (uint8_t)(((uint16_t)(uint8_t)(sine_quarter[index + 1u] - base) *
+                       phase + 32u) >> 6);
     return invert ? 512u - base : base;
 }
 
@@ -50,11 +50,21 @@ void dimmer_defaults(dimmer_state_t *s)
     *out = DIMMER_MAX_PERCENT;
 }
 
+#ifdef __XC8
+void dimmer_copy_state(uint8_t destination, uint8_t source)
+{
+    uint8_t n = sizeof(dimmer_state_t);
+    do {
+        *(uint8_t *)(uintptr_t)destination++ = *(uint8_t *)(uintptr_t)source++;
+    } while (--n);
+}
+#else
 void dimmer_copy_state(uint8_t *destination, const uint8_t *source)
 {
     uint8_t n = sizeof(dimmer_state_t);
     do { *destination++ = *source++; } while (--n);
 }
+#endif
 
 void dimmer_init(const dimmer_state_t *s)
 {
@@ -73,7 +83,7 @@ uint8_t dimmer_editing(void) { return editor & 3u; }
 uint16_t dimmer_phase(void) { return breath_phase; }
 uint16_t dimmer_sine(uint16_t phase)
 {
-    return sine_level(phase > 1024u ? BREATHE_PHASE_STEPS - phase : phase);
+    return sine_level(phase);
 }
 #endif
 
@@ -86,13 +96,20 @@ uint16_t dimmer_output(void)
     uint8_t span, percent = current.brightness;
     uint16_t level;
     if (!current.power_on) return 0;
-    if (editor) percent = editor == 1u ? current.minimum : current.maximum;
-    if (editor || !(current.breath & BREATHE_MODE)) return dimmer_duty(percent);
-    level = sine_level(breath_phase > 1024u ?
-                       BREATHE_PHASE_STEPS - breath_phase : breath_phase);
-    span = current.maximum - current.minimum;
+    if (editor == 1u) percent = current.minimum;
+    else if (editor) percent = current.maximum;
+    if (editor || !(current.breath & BREATHE_MODE)) {
+        if (percent == DIMMER_LOWEST || (!editor && !percent)) return 1;
+        return dimmer_duty(percent);
+    }
+    level = sine_level(breath_phase);
+    percent = current.minimum & 127u;
+    span = current.maximum - percent;
     /* Q9 times four counts/percent: dividing by 128 keeps the product in 16 bits. */
-    return dimmer_duty(current.minimum) + ((level * span + 64u) >> 7);
+    level = dimmer_duty(percent) + ((level * span + 64u) >> 7);
+    /* The one-count floor clips only the otherwise-zero sine frames. */
+    if (!level && current.minimum == DIMMER_LOWEST) ++level;
+    return level;
 }
 
 uint8_t dimmer_status_led(void)
@@ -105,7 +122,7 @@ uint8_t dimmer_tick(const button_events_t *e)
 {
     const uint8_t *in = (const uint8_t *)e;
     uint8_t amount, action, previous, was_on, changed = 0;
-    uint8_t low = DIMMER_MIN_PERCENT, high = DIMMER_MAX_PERCENT, value;
+    uint8_t low = 0, high = DIMMER_MAX_PERCENT, value;
     uint8_t *level = &current.brightness;
     uint16_t period;
     if (mode_flash && --mode_flash == 0) changed = DIMMER_RENDER;
@@ -173,22 +190,21 @@ uint8_t dimmer_tick(const button_events_t *e)
     if ((EVENT(held) & BUTTON_POWER) && current.power_on && !editor) {
         current.breath ^= BREATHE_MODE;
         mode_flash = STATUS_MODE_FLASH_TICKS;
-        if (current.brightness <= current.minimum) breath_phase = 0;
+        value = current.minimum & 127u;
+        if (current.brightness <= value) breath_phase = 0;
         else if (current.brightness >= current.maximum) breath_phase = 1024;
         else {
             /* Invert the same rising sine envelope to enter near the saved
                steady brightness, rather than treating sine phase as linear. */
-            action = current.maximum - current.minimum;
-            breath_time = (uint16_t)(current.brightness - current.minimum) * 512u;
+            action = current.maximum - value;
+            breath_time = (uint16_t)(current.brightness - value) * 512u;
             low = 0;
-            /* Search phase in four-position increments with byte-sized bounds. */
-            high = 255;
-            while (low < high) {
-                value = high - low;
-                value = (uint8_t)(low + (value >> 1) + (value & 1u));
-                if (sine_level((uint16_t)value << 2) * action > breath_time) high = value - 1u;
-                else low = value;
-            }
+            /* Successive bits search the same 256 four-position phase values. */
+            high = 128;
+            do {
+                value = low | high;
+                if (sine_level((uint16_t)value << 2) * action <= breath_time) low = value;
+            } while ((high >>= 1) != 0);
             breath_phase = (uint16_t)low << 2;
         }
         breath_time = 0;
@@ -210,6 +226,8 @@ uint8_t dimmer_tick(const button_events_t *e)
     action = (uint8_t)((EVENT(short_press) | EVENT(repeat)) & BUTTON_BRIGHTNESS);
     if (!action || action == BUTTON_BRIGHTNESS) return changed;
     amount = (EVENT(repeat) & action) ? DIMMER_RAMP_PERCENT : DIMMER_STEP_PERCENT;
+    /* Taps retain the 10% boundary; fine holds can reach every whole percent. */
+    if (!EVENT(repeat)) low = DIMMER_MIN_PERCENT;
     if (!editor && (current.breath & BREATHE_MODE)) {
         if (action == BUTTON_UP) {
             if ((current.breath & BREATHE_PERIOD_MASK) == BREATHE_MAX_PERIOD)
@@ -235,9 +253,10 @@ uint8_t dimmer_tick(const button_events_t *e)
         high = (uint8_t)(current.maximum - 1u);
     } else if (editor) {
         level = &current.maximum;
-        low = (uint8_t)(current.minimum + 1u);
+        low = (uint8_t)((current.minimum & 127u) + 1u);
     }
     previous = value = *level;
+    value &= 127u;
     was_on = current.power_on;
     if (action == BUTTON_UP) {
         value += amount; /* Valid levels and steps <=100 cannot overflow. */
@@ -245,6 +264,15 @@ uint8_t dimmer_tick(const button_events_t *e)
     } else {
         if (value < low + amount) value = low;
         else value -= amount;
+    }
+    if (!editor && !EVENT(repeat) && previous <= DIMMER_MIN_PERCENT && action == BUTTON_DOWN)
+        value = 0;
+    else if (editor == 1u) {
+        /* Insert the one-count level next to off. Repeats cannot leave it
+           downward; only a distinct short Down press can select off. */
+        if ((!previous && action == BUTTON_UP) ||
+            (!value && previous && (previous != DIMMER_LOWEST ||
+                                   !(EVENT(short_press) & BUTTON_DOWN)))) value = DIMMER_LOWEST;
     }
     *level = value;
     if (editor) return DIMMER_RENDER;

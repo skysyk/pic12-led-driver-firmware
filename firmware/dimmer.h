@@ -3,15 +3,22 @@
 #include <stdint.h>
 #include "buttons.h"
 typedef struct {
-    uint8_t brightness, power_on;
+    uint8_t brightness, power_on; /* Steady brightness 0 means one PWM count. */
     uint8_t breath; /* Bit 7: breathing enabled; bits 0..4: period in 0.5 s steps. */
-    uint8_t minimum, maximum;
+    uint8_t minimum, maximum; /* Minimum 128 means one count; 0 means off. */
 } dimmer_state_t;
 typedef char dimmer_state_must_be_five_bytes[(sizeof(dimmer_state_t) == 5u) ? 1 : -1];
 /* Byte pointers keep RAM addresses eight-bit on this PIC. Copy one settings state. */
+#ifdef __XC8
+/* PIC12F683 RAM ends at 0xBF; its state addresses fit in one byte. */
+void dimmer_copy_state(uint8_t destination, uint8_t source);
+#define DIMMER_COPY(destination, source) \
+    dimmer_copy_state((uint8_t)(uintptr_t)(destination), (uint8_t)(uintptr_t)(source))
+#else
 void dimmer_copy_state(uint8_t *destination, const uint8_t *source);
 #define DIMMER_COPY(destination, source) \
     dimmer_copy_state((uint8_t *)(destination), (const uint8_t *)(source))
+#endif
 /* State changes request persistence; power/preferences save immediately. */
 #define DIMMER_CHANGED 1u
 #define DIMMER_POWER_CHANGED 2u

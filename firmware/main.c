@@ -11,7 +11,6 @@ void main(void)
     button_events_t events;
     uint8_t changed;
     hw_init();
-    buttons_init();
 #if BOARD_INDICATOR_ONLY
     /* The bench image never reads or changes persistent settings. */
     dimmer_defaults(&restored);

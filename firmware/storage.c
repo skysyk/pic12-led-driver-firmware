@@ -7,7 +7,9 @@
 #define RECORD_SIZE 10u
 #define COMMIT 0xa5u
 #define LEGACY_VERSION 1u
-#define VERSION 4u
+#define VERSION 5u
+#define LEGACY_MIN_DUTY ((uint16_t)((DIMMER_MIN_PERCENT * 1023UL + 50u) / 100u))
+#define LEGACY_MAX_DUTY ((uint16_t)((DIMMER_MAX_PERCENT * 1023UL + 50u) / 100u))
 #define IDLE 0u
 #define INVALIDATE 1u
 #define PAYLOAD 2u
@@ -32,13 +34,17 @@ static uint8_t pending_changes(void)
 
 static uint8_t crc8(uint8_t last)
 {
-    uint8_t crc = 0, i, bit;
-    /* CRC-8/SMBUS: polynomial 0x07, init 0, no reflection/xorout. */
-    for (i = 1; i <= last; ++i) {
-        crc ^= record[i];
-        for (bit = 0; bit < 8; ++bit)
-            crc = (uint8_t)((crc & 0x80u) ? ((uint16_t)crc << 1) ^ 0x07u : (uint16_t)crc << 1);
-    }
+    uint8_t crc = 0, bit;
+    const uint8_t *data = record + 1;
+    /* CRC-8/SMBUS: polynomial 0x07, init 0, no reflection/xorout; last is 6 or 7. */
+    do {
+        crc ^= *data++;
+        bit = 8;
+        do {
+            if (crc & 0x80u) { crc <<= 1; crc ^= 0x07u; }
+            else crc <<= 1;
+        } while (--bit);
+    } while (--last);
     return crc;
 }
 
@@ -65,21 +71,22 @@ void storage_init(dimmer_state_t *restored)
         for (i = 0; i < 8u; ++i)
             record[i] = hal_eeprom_read((uint8_t)(slot + i));
         if (record[0] != COMMIT || record[1] < LEGACY_VERSION || record[1] > VERSION) continue;
-        if (record[1] == VERSION) {
+        if (record[1] >= 4u) {
             if (slot & 8u) continue;
             record[8] = hal_eeprom_read((uint8_t)(slot + 8u));
             record[9] = hal_eeprom_read((uint8_t)(slot + 9u));
-            if (record[9] || record[8] != crc8(7) || (record[4] & 127u) < DIMMER_MIN_PERCENT ||
-                (record[4] & 127u) > DIMMER_MAX_PERCENT ||
+            i = record[4] & 127u;
+            if (record[9] || record[8] != crc8(7) ||
+                i > DIMMER_MAX_PERCENT || (record[1] == 4u && i < DIMMER_MIN_PERCENT) ||
                 (record[5] & 127u) >= (record[6] & 127u) || (record[6] & 127u) > 100u ||
-                record[7] < 1u || record[7] > BREATHE_MAX_PERIOD) continue;
+                (record[1] == VERSION && record[5] > 100u && record[5] != DIMMER_LOWEST) ||
+                (uint8_t)(record[7] - 1u) >= BREATHE_MAX_PERIOD) continue;
         } else {
             duty = (uint16_t)(record[4] | ((uint16_t)record[5] << 8));
             if ((record[1] != 3u && record[6] > (record[1] == LEGACY_VERSION ? 1u : 3u)) ||
                 record[7] != crc8(6)) continue;
-            if (duty < (uint16_t)((DIMMER_MIN_PERCENT * 1023UL + 50u) / 100u) ||
-                duty > (uint16_t)((DIMMER_MAX_PERCENT * 1023UL + 50u) / 100u) ||
-                (record[1] == 3u && ((record[6] >> 2) & 31u) >= BREATHE_MAX_PERIOD)) continue;
+            if ((uint16_t)(duty - LEGACY_MIN_DUTY) > LEGACY_MAX_DUTY - LEGACY_MIN_DUTY ||
+                (record[1] == 3u && (record[6] & 124u) >= BREATHE_MAX_PERIOD * 4u)) continue;
         }
         candidate = (uint16_t)(record[2] | ((uint16_t)record[3] << 8));
         difference = (uint16_t)(candidate - sequence);
@@ -87,10 +94,10 @@ void storage_init(dimmer_state_t *restored)
             sequence = candidate;
             last_address = slot;
             have_saved = 1;
-            if (record[1] == VERSION) {
+            if (record[1] >= 4u) {
                 saved.brightness = record[4] & 127u;
                 saved.power_on = record[4] >> 7;
-                saved.minimum = record[5] & 127u;
+                saved.minimum = record[1] == VERSION ? record[5] : record[5] & 127u;
                 saved.maximum = record[6] & 127u;
                 saved.breath = (uint8_t)((record[6] & BREATHE_MODE) | record[7]);
             } else {
@@ -150,7 +157,7 @@ void storage_service(void)
         record[2] = (uint8_t)next;
         record[3] = (uint8_t)(next >> 8);
         record[4] = (uint8_t)(snapshot.brightness | (snapshot.power_on << 7));
-        record[5] = snapshot.minimum; /* Former standby preference is obsolete. */
+        record[5] = snapshot.minimum; /* v5: 128 is the one-count minimum. */
         record[6] = (uint8_t)(snapshot.maximum | (snapshot.breath & BREATHE_MODE));
         record[7] = snapshot.breath & BREATHE_PERIOD_MASK;
         record[8] = crc8(7);

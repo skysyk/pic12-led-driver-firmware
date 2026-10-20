@@ -18,9 +18,14 @@ Physical board tests have not been performed.
   A continuous power hold that starts while off arms
   settings reset after three seconds and restores defaults after six seconds.
   Long power holds that start while on do not reset settings.
-- In steady mode, tap up/down for a 10 percentage point change; clamp between 10% and 100%.
+- In steady mode, tap up/down for a 10 percentage point change between 10% and
+  100%, with an extra 0.25% PWM-duty level. A Down tap at 10% or below selects
+  this one-count level; further Down taps/holds stay there. An Up tap from the
+  one-count level returns to 10%.
 - In steady mode, hold a brightness button for about 400 ms to start changing by 1 percentage point
-  about every 20 ms. Release after a hold does not add a coarse step.
+  about every 20 ms, including 9%, 8%, down through 1%, then 0.25%. Holding Up
+  from 0.25% starts at 1% and continues upward by 1%. Release after a hold does
+  not add a coarse step. All intermediate levels survive power cycles.
 - Brightness adjustment in standby turns the main output on, including at a limit.
 - Opposing brightness buttons cancel adjustment until both have been released.
   Power cancels overlapping brightness gestures until all brightness buttons
@@ -63,7 +68,9 @@ The 1.024 ms update interval limits faster cycles: full-range 0.5- and 1-second
 cycles reach 293 and 391 distinct duties respectively. Periods below 2.5 seconds
 skip some phase positions to preserve timing; longer cycles visit all 2,048.
 The interpolated lookup table keeps sine error within two PWM counts of the ideal
-envelope across all supported ranges. Mode entry stays within three PWM counts
+envelope across integer-percentage ranges. With the one-count minimum, only
+otherwise-zero frames are clipped to one; error against the shifted ideal sine
+is within three PWM counts. Mode entry stays within three PWM counts
 of the clamped steady brightness.
 
 ### Min/max editor
@@ -76,7 +83,14 @@ of the clamped steady brightness.
 | Hold up and down together for 1 second again | Save both limits and resume breathing |
 
 The editor keeps minimum strictly below maximum and allows endpoints from 0% to
-100%. Coarse steps clamp at the other limit minus/plus 1% instead of crossing it.
+100%, plus a one-count (0.25% PWM-duty) minimum between off and 1%.
+Down taps and holds reach that one-count level before off. Holding Down stays
+there indefinitely, including a fresh hold that starts at this level. Release
+and give a separate Down tap to select off. Up from off selects the one-count
+level first; another tap selects 10%, or subsequent hold repeats reach 1%, 2%, etc.
+The upper limit remains 1–100%; with a 1% maximum the minimum can be either off
+or the one-count level. Other coarse steps clamp at the other limit minus/plus
+1% instead of crossing it.
 It pauses the animation and previews the selected limit steadily. The status
 indicator is solid for minimum and blinks for maximum (245 ticks on, 245 off:
 250.88 ms per half-cycle nominally). Selecting either limit starts its indication
@@ -90,7 +104,7 @@ after the 400 ms hold threshold, without an extra step on release.
 Both limits save together when you exit and survive power cycles. Unconfirmed
 edits are discarded on power loss; opening/closing without changing limits does
 not write EEPROM. Steady brightness and breathing period are preserved. The
-status LED turns off on exit. The size-optimized build fits with nine flash
+status LED turns off on exit. The size-optimized build fits with 31 flash
 words and three RAM bytes free; physical editor checks remain pending.
 
 ### Settings reset
@@ -209,7 +223,7 @@ Rebuild with `.\scripts\build-minipro.ps1`. See
 
 ## EEPROM journal
 
-The 256-byte EEPROM holds 16 rotating, 16-byte slots. Each version 4 record uses
+The 256-byte EEPROM holds 16 rotating, 16-byte slots. Each version 5 record uses
 ten bytes; the rest is reserved. This layout makes room for both limits and keeps
 address calculations small while supporting safe migration from the 32-slot
 legacy journal.
@@ -217,10 +231,10 @@ legacy journal.
 | Offset | Meaning |
 | --- | --- |
 | 0 | Commit marker `0xA5`, written last |
-| 1 | Version `4` (versions `1`–`3` remain readable at their original eight-byte locations) |
+| 1 | Version `5` (version `4` remains readable in aligned slots; `1`–`3` at their original eight-byte locations) |
 | 2–3 | 16-bit sequence, little-endian |
-| 4 | Bits 0–6: steady brightness 10–100%; bit 7: power on |
-| 5 | Bits 0–6: minimum 0–99%; bit 7: zero in new saves (old indicator preference is ignored) |
+| 4 | Bits 0–6: steady brightness 1–100%, or `0` for one PWM count; bit 7: power on |
+| 5 | Minimum 0–99%, or byte value `128` for one PWM count |
 | 6 | Bits 0–6: maximum 1–100%; bit 7: breathing enabled |
 | 7 | Cycle period in half-second steps, 1–20 |
 | 8 | CRC-8/SMBUS over bytes 1–7: poly `0x07`, init `0`, no reflection/xorout |
@@ -229,19 +243,24 @@ legacy journal.
 Boot rejects bad markers, versions, CRCs, guards, and out-of-range settings, and
 compares sequences modulo 65536. This ordering assumes valid journal entries
 span fewer than 32768 updates, as normal operation of the ring ensures. Bounds
-must satisfy `0 <= minimum < maximum <= 100`. Legacy duties are restored to the
-nearest integer percentage; the new format stores percentages directly.
+must satisfy `0 <= minimum < maximum <= 100` after decoding the one-count
+sentinel. Legacy duties are restored to the nearest integer percentage; ordinary
+values in the new format still store percentages directly.
 
 Versions 1/2 restore brightness and power in steady mode with the default
 breathing period. Version 3 additionally restores breathing mode and
-period. All legacy versions use default 10–100% breathing limits. The first
-version 4 save selects a slot that cannot overlap the newest valid legacy record;
+period. Versions 1–3 use default 10–100% breathing limits; version 4 restores
+both saved percentage limits. The first version 5 save selects a slot that
+cannot overlap the newest valid older record;
 its commit marker is written only after all payload and guard bytes verify.
 The guard prevents an old odd-slot record from reappearing when a CRC equals
-`0xA5` after sequence rollover. Earlier firmware cannot read version 4 records
-and may restore an older record or defaults if downgraded.
+`0xA5` after sequence rollover. Firmware predating version 5 cannot read these
+records; the initial v5 firmware also rejects the new steady 1–9% values.
+Downgrading may therefore restore an older record or defaults.
 Legacy indicator preferences are accepted and ignored, including in older version
-4 records. New records clear that obsolete bit. Use the six-second power hold or
+4 records; a version 4 off minimum stays off even if its obsolete indicator bit
+was set. Version 5 reuses the standalone value `128` for the one-count minimum.
+Use the six-second power hold or
 `scripts/program.ps1 -ResetSettings` to restore all defaults. The bench image never
 accesses EEPROM, so its settings last only until power is disconnected.
 
@@ -268,7 +287,7 @@ release order and held buttons, six-second reset timing/cancellation, status LED
 rendering, one-second power holds and immediate tap timing, all 2,048 sine positions,
 all 20 complete breathing periods and their visited phases, default/full/narrow
 ranges, all 100 percentage spans at all 20 periods, complete duty coverage from
-1.5 seconds onward, sine approximation error across every PWM span, 459,550 mode-entry cases,
+1.5 seconds onward, sine approximation error across every PWM span, 505,000 mode-entry cases,
 period wraparound and delayed saves, animation write avoidance, breathing power
 restoration, editor entry/exit timing, preview and save behavior, all 5,050 valid
 min/max pairs with 10% taps, 1% hold ramps, conflict prevention,

@@ -48,6 +48,7 @@ int main(void)
         test_watchdog_clears = test_watchdog_resets = test_watchdog_lf_ticks = 0;
         test_timer_running = 1; test_timer_ready_at = 0;
         WDTCON = 0x08; EEDAT = 0xff;
+        buttons_init(); /* Real resets clear static button state in C startup. */
         test_expect_watchdog_reset = scenario != 0;
         if (scenario == 0) {
             if (setjmp(healthy_completion) == 0) firmware_main();
