@@ -16,18 +16,18 @@
 
 static dimmer_state_t saved, requested, snapshot;
 static uint16_t sequence, delay_ticks;
-static uint8_t last_slot, have_saved, phase, position, target_slot;
+static uint8_t last_address, have_saved, phase, position, target_address;
 #ifdef FIRMWARE_TEST
 static uint8_t fault;
 #endif
 static uint8_t record[RECORD_SIZE];
 
-static uint8_t equal(const dimmer_state_t *a, const dimmer_state_t *b)
+static uint8_t pending_changes(void)
 {
-    const uint8_t *x = (const uint8_t *)a, *y = (const uint8_t *)b;
-    uint8_t n = sizeof *a;
-    do { if (*x++ != *y++) return 0; } while (--n);
-    return 1;
+    const uint8_t *x = (const uint8_t *)&requested, *y = (const uint8_t *)&saved;
+    uint8_t n = sizeof requested;
+    do { if (*x++ != *y++) return 1; } while (--n);
+    return 0;
 }
 
 static uint8_t crc8(uint8_t last)
@@ -44,7 +44,7 @@ static uint8_t crc8(uint8_t last)
 
 static uint8_t address(uint8_t offset)
 {
-    return (uint8_t)(target_slot * 8u + offset);
+    return (uint8_t)(target_address + offset);
 }
 
 void storage_init(dimmer_state_t *restored)
@@ -57,16 +57,18 @@ void storage_init(dimmer_state_t *restored)
     fault = 0;
 #endif
     sequence = delay_ticks = 0;
-    last_slot = SLOT_COUNT - 1;
+    last_address = (SLOT_COUNT - 1u) * 8u;
     dimmer_defaults(&saved);
-    for (slot = 0; slot < SLOT_COUNT; ++slot) {
+    slot = 0;
+    /* Walk EEPROM byte addresses directly; the byte wraps after all 32 half-slots. */
+    do {
         for (i = 0; i < 8u; ++i)
-            record[i] = hal_eeprom_read((uint8_t)(slot * 8u + i));
+            record[i] = hal_eeprom_read((uint8_t)(slot + i));
         if (record[0] != COMMIT || record[1] < LEGACY_VERSION || record[1] > VERSION) continue;
         if (record[1] == VERSION) {
-            if (slot & 1u) continue;
-            record[8] = hal_eeprom_read((uint8_t)(slot * 8u + 8u));
-            record[9] = hal_eeprom_read((uint8_t)(slot * 8u + 9u));
+            if (slot & 8u) continue;
+            record[8] = hal_eeprom_read((uint8_t)(slot + 8u));
+            record[9] = hal_eeprom_read((uint8_t)(slot + 9u));
             if (record[9] || record[8] != crc8(7) || (record[4] & 127u) < DIMMER_MIN_PERCENT ||
                 (record[4] & 127u) > DIMMER_MAX_PERCENT ||
                 (record[5] & 127u) >= (record[6] & 127u) || (record[6] & 127u) > 100u ||
@@ -83,7 +85,7 @@ void storage_init(dimmer_state_t *restored)
         difference = (uint16_t)(candidate - sequence);
         if (!have_saved || (difference != 0 && difference < 0x8000u)) {
             sequence = candidate;
-            last_slot = slot;
+            last_address = slot;
             have_saved = 1;
             if (record[1] == VERSION) {
                 saved.brightness = record[4] & 127u;
@@ -102,14 +104,14 @@ void storage_init(dimmer_state_t *restored)
                 saved.maximum = DIMMER_MAX_PERCENT;
             }
         }
-    }
-    requested = saved;
-    *restored = saved;
+    } while ((slot += 8u) != 0);
+    DIMMER_COPY(&requested, &saved);
+    DIMMER_COPY(restored, &saved);
 }
 
 void storage_request(const dimmer_state_t *s, uint8_t immediate)
 {
-    requested = *s;
+    DIMMER_COPY(&requested, s);
     delay_ticks = immediate ? 0 : STORAGE_DELAY_TICKS;
 }
 
@@ -117,7 +119,7 @@ void storage_tick(void) { if (delay_ticks) --delay_ticks; }
 #ifdef FIRMWARE_TEST
 uint8_t storage_busy(void)
 {
-    return phase != IDLE || hal_eeprom_busy() || !equal(&requested, &saved);
+    return phase != IDLE || hal_eeprom_busy() || pending_changes();
 }
 uint8_t storage_fault(void) { return fault; }
 #endif
@@ -137,11 +139,11 @@ void storage_service(void)
     uint16_t next;
     if (hal_eeprom_busy()) return;
     if (phase == IDLE) {
-        if (delay_ticks || equal(&requested, &saved)) return;
-        snapshot = requested;
+        if (delay_ticks || !pending_changes()) return;
+        DIMMER_COPY(&snapshot, &requested);
         /* Even half-slots are 16-byte records. Advancing past the last
            half-slot also protects a legacy eight-byte record during migration. */
-        target_slot = (uint8_t)((last_slot + 2u) & 30u);
+        target_address = (uint8_t)((last_address + 16u) & 0xf0u);
         next = (uint16_t)(sequence + 1u);
         record[0] = 0;
         record[1] = VERSION;
@@ -171,10 +173,9 @@ void storage_service(void)
         if (position == RECORD_SIZE) phase = COMMITTING;
     } else if (phase == VERIFY_COMMIT) {
         if (hal_eeprom_read(address(0)) != COMMIT) { fail(); return; }
-        saved = snapshot;
+        DIMMER_COPY(&saved, &snapshot);
         sequence = (uint16_t)(record[2] | ((uint16_t)record[3] << 8));
-        last_slot = target_slot;
-        have_saved = 1;
+        last_address = target_address;
         phase = IDLE;
 #ifdef FIRMWARE_TEST
         fault = 0;

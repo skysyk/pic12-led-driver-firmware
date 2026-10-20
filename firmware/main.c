@@ -1,3 +1,4 @@
+#include <xc.h>
 #include "board.h"
 #include "hal.h"
 #include "buttons.h"
@@ -33,6 +34,7 @@ void main(void)
 #endif
                 hw_render(dimmer_output(), dimmer_status_led());
             }
+            hw_watchdog_feed(); /* Only completed ticks demonstrate progress. */
         }
 #if !BOARD_INDICATOR_ONLY
         storage_service();

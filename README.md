@@ -27,7 +27,7 @@ Physical board tests have not been performed.
   have been released, including staggered releases and ongoing hold ramps.
 - The status LED flashes for half a second when switching either direction
   between steady and breathing modes. Otherwise it is off during normal
-  standby/operation, on throughout min/max editing, and blinking during the
+  standby/operation, solid while editing minimum, blinking while editing maximum, and blinking during the
   three-second reset confirmation period. Turning the output off cancels a flash.
 - Brightness and period saves wait 900 ms after the last change; power changes,
   mode changes, editor confirmation, and settings reset request an immediate save.
@@ -35,8 +35,8 @@ Physical board tests have not been performed.
 
 ## Breathing controls
 
-The output ramps linearly between the saved minimum and maximum (default 10% and
-100%), then back down. Hold power for one second
+The output follows a 2,048-phase sine approximation between the saved minimum and
+maximum (default 10% and 100%), slowing near each endpoint. Hold power for one second
 while the output is on to toggle breathing. Entering starts near the saved steady
 brightness, clamped to the breathing limits; exiting returns to steady brightness. After power-on/restoration,
 breathing starts at its minimum. The full rise-and-fall cycle defaults to 3 seconds.
@@ -53,8 +53,18 @@ the instantaneous animation phase is not stored. Steady brightness is retained
 separately and is not changed by the animation or period buttons.
 
 The 1.024 ms timebase uses 488 ticks per half-second setting: actual nominal full
-cycles are 0.499712–9.994240 seconds, before oscillator tolerance. PWM remains
-37.736 kHz; the breathing envelope is independent of the PWM carrier.
+cycles are 0.499712–9.994240 seconds, before oscillator tolerance. PWM is
+20 kHz; the breathing envelope is independent of the PWM carrier.
+The full cycle has 2,048 phase positions and 513 normalized amplitude weights,
+enough to reach all 401 hardware duties including off and static full-on. At
+periods of 1.5 seconds and longer, every duty in the selected range appears in
+each complete cycle: 361 levels for default 10–100% limits, or 401 for 0–100%.
+The 1.024 ms update interval limits faster cycles: full-range 0.5- and 1-second
+cycles reach 293 and 391 distinct duties respectively. Periods below 2.5 seconds
+skip some phase positions to preserve timing; longer cycles visit all 2,048.
+The interpolated lookup table keeps sine error within two PWM counts of the ideal
+envelope across all supported ranges. Mode entry stays within three PWM counts
+of the clamped steady brightness.
 
 ### Min/max editor
 
@@ -67,7 +77,11 @@ cycles are 0.499712–9.994240 seconds, before oscillator tolerance. PWM remains
 
 The editor keeps minimum strictly below maximum and allows endpoints from 0% to
 100%. Coarse steps clamp at the other limit minus/plus 1% instead of crossing it.
-It pauses the animation and previews the selected limit steadily. A held
+It pauses the animation and previews the selected limit steadily. The status
+indicator is solid for minimum and blinks for maximum (245 ticks on, 245 off:
+250.88 ms per half-cycle nominally). Selecting either limit starts its indication
+immediately; the main LEDs keep a steady preview and controls remain responsive.
+The blink phase is transient and does not cause settings saves. A held
 pair triggers once; release both buttons before the next enter/exit hold. Power
 only switches the selected limit on a tap in the editor; power holds are ignored.
 Its normal on/off and mode-hold gestures resume after leaving. Individual up/down holds ramp by 1% every 20.48 ms
@@ -76,8 +90,8 @@ after the 400 ms hold threshold, without an extra step on release.
 Both limits save together when you exit and survive power cycles. Unconfirmed
 edits are discarded on power loss; opening/closing without changing limits does
 not write EEPROM. Steady brightness and breathing period are preserved. The
-status LED turns off on exit. The size-optimized build fits with six flash words
-and seven RAM bytes free; physical editor checks remain pending.
+status LED turns off on exit. The size-optimized build fits with nine flash
+words and three RAM bytes free; physical editor checks remain pending.
 
 ### Settings reset
 
@@ -97,12 +111,13 @@ standby-indicator disable feature and its preference have been removed.
 
 ## PWM and timing
 
-Logical brightness is an integer percentage. EEPROM now stores percentages;
+User brightness settings are integer percentages. EEPROM stores percentages;
 legacy 10-bit duty records are decoded on startup. Runtime percentages convert
-directly to the 212-count PWM period using rounded 16-bit arithmetic, with an
-eight-bit duty interface between the state machine and hardware.
-Intermediate levels use CCP1/Timer2 at **37,735.849 Hz**, the nearest setting to
-38 kHz with the 8 MHz clock (`PR2=52`, prescaler 1:1). Off and maximum use
+directly to the 400-count PWM period (four counts per percent), with a
+sixteen-bit duty interface and cache between the state machine and hardware. The breathing
+envelope operates directly in duty counts rather than rounding each frame to 1%.
+Intermediate levels use CCP1/Timer2 at **20,000 Hz** nominally with the 8 MHz clock
+(`PR2=99`, prescaler 1:1). Off and maximum use
 static inactive/active GP2 levels
 for true 0% and 100%. Timer0 independently free-runs at **1.024 ms/tick**.
 Intervals are rounded up: debounce/ramp 20.48 ms, brightness hold 400.384 ms,
@@ -132,7 +147,14 @@ also needs an appropriate external bias to hold the load off while reset leaves
 the PIC pins as inputs; firmware cannot control the reset interval.
 
 Configuration selects internal oscillator GPIO mode, MCLR off, power-up timer
-and brown-out reset on, watchdog off, code/data protection off, IESO/FCMEN off.
+and brown-out reset on, software-controlled watchdog, code/data protection off,
+and IESO/FCMEN off. Configuration stays `0x33C4`; startup enables the watchdog via
+`WDTCON=0x15`, about 1.06 seconds nominally from LFINTOSC. Only completed Timer0
+tick processing clears it; the interrupt handler, idle loop, and PWM wait do not.
+Loss of ticks or a stalled foreground operation therefore permits a watchdog reset.
+The Timer2 boundary wait has a 256-poll budget, about 0.64 ms at 8 MHz plus ISR
+latency. Expiration drives the main output inactive, disconnects CCP1, and waits
+without clearing the watchdog. Recovery reloads the last valid EEPROM settings.
 Analog inputs, ADC, comparator, voltage reference, and interrupt-on-change are
 disabled. GPIO latches are loaded with inactive levels before output enable.
 
@@ -243,13 +265,26 @@ in the quiet window or an incomplete transaction; the previous record is retaine
 a hold, limits, long holds, chords, power priority, standby adjustment, restoration,
 write avoidance, deferred/prompt saves, power/brightness overlaps with either
 release order and held buttons, six-second reset timing/cancellation, status LED
-rendering, one-second power holds and immediate tap timing, all 20 complete breathing periods,
+rendering, one-second power holds and immediate tap timing, all 2,048 sine positions,
+all 20 complete breathing periods and their visited phases, default/full/narrow
+ranges, all 100 percentage spans at all 20 periods, complete duty coverage from
+1.5 seconds onward, sine approximation error across every PWM span, 459,550 mode-entry cases,
 period wraparound and delayed saves, animation write avoidance, breathing power
 restoration, editor entry/exit timing, preview and save behavior, all 5,050 valid
 min/max pairs with 10% taps, 1% hold ramps, conflict prevention,
 legacy-record compatibility, state changes during an asynchronous write,
 CRC corruption, invalid fields, three complete slot rotations, sequence rollover,
 and write-verification failures with retry backoff.
+
+`tests/test_hw.c` compiles the production hardware code against a small register
+model. It checks all 401 duties, including transitions differing only in bit 8,
+the Timer2 setup, static endpoints, status LED, tick handling, and EEPROM interrupt
+restoration. Delayed/stopped Timer2 tests check the polling limit and watchdog
+recovery from both full-on and active PWM. `tests/test_main.c` executes the
+production main loop and hardware driver with injected ticks/buttons and an LF
+watchdog model, checking normal servicing and missing-tick/render-stall recovery.
+The model supplies Timer2 boundaries; it does not measure waveform
+timing, voltages, emissions, or execution speed on the PIC.
 
 The power-loss matrix tests every possible torn-byte value at each of eleven write
 positions, both for the first record and reuse of a full ring: **5,632 cases**.

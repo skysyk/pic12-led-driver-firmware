@@ -113,7 +113,9 @@ static void status_is(uint8_t expected)
 static void test_pwm_scaling(void)
 {
     unsigned percent;
-    uint8_t counts, previous = 0;
+    uint16_t counts, previous = 0;
+    assert(_XTAL_FREQ / (4u * (BOARD_PWM_PR2 + 1u)) == 20000u);
+    assert(BOARD_PWM_PERIOD == 400u && BREATHE_PHASE_STEPS == 2048u);
     for (percent = 0; percent <= 100; ++percent) {
         counts = dimmer_duty((uint8_t)percent);
         assert(counts == ((uint32_t)percent * BOARD_PWM_PERIOD + 50u) / 100u);
@@ -128,8 +130,8 @@ static void test_buttons_and_dimming(void)
     fresh();
     state_is(50, 0);
     assert(dimmer_output() == 0);
-    assert(dimmer_duty(10) == 21 && dimmer_duty(50) == 106);
-    assert(dimmer_duty(100) == 212);
+    assert(dimmer_duty(10) == 40 && dimmer_duty(50) == 200);
+    assert(dimmer_duty(100) == 400);
     for (i = 0; i < 30; ++i) {
         ui_tick(BUTTON_POWER);
         ui_tick(0);
@@ -513,6 +515,45 @@ static void test_editor_gestures_and_save(void)
     assert(!dimmer_editing()); /* Power keeps priority over the chord. */
     ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
 }
+static void test_editor_status_blink(void)
+{
+    dimmer_state_t s = {50, 1, BREATHE_MODE | BREATHE_DEFAULT_PERIOD, 10, 100};
+    unsigned before, i;
+    fresh(); storage_request(&s, 1); drain(); (void)boot();
+    before = writes;
+    editor_gesture();
+    ui_ticks(0, STATUS_EDITOR_BLINK_TICKS * 4);
+    assert(dimmer_editing() == 1 && dimmer_output() == dimmer_duty(10));
+    status_is(1); /* Minimum stays solid for any animation phase. */
+    tap(BUTTON_POWER); assert(dimmer_editing() == 2); status_is(1);
+    ui_ticks(0, STATUS_EDITOR_BLINK_TICKS - 1); status_is(1);
+    ui_tick(0); status_is(0);
+    assert(dimmer_output() == dimmer_duty(100)); /* Only the indicator blinks. */
+    tap(BUTTON_DOWN); /* Editing during the dark phase still selects maximum. */
+    assert(dimmer_state()->maximum == 90 && dimmer_editing() == 2);
+    assert(dimmer_output() == dimmer_duty(90)); status_is(0);
+    tap(BUTTON_POWER); /* A dark maximum must select minimum, not exit editing. */
+    assert(dimmer_editing() == 1 && dimmer_state()->power_on); status_is(1);
+    assert(dimmer_output() == dimmer_duty(10));
+    tap(BUTTON_POWER); assert(dimmer_editing() == 2); status_is(1);
+    /* Long power holds cannot change the selected bound or disturb the blink. */
+    for (i = 1; i <= 70000; ++i) {
+        ui_tick(BUTTON_POWER);
+        status_is((uint8_t)!((i / STATUS_EDITOR_BLINK_TICKS) & 1u));
+        assert(dimmer_editing() == 2 && dimmer_state()->power_on);
+        assert(dimmer_output() == dimmer_duty(90));
+    }
+    ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
+    assert(writes == before && dimmer_state()->breath == s.breath);
+    editor_gesture(); assert(!dimmer_editing()); status_is(0);
+    assert(writes > before); drain(); (void)boot();
+    assert(dimmer_state()->minimum == 10 && dimmer_state()->maximum == 90);
+    before = writes;
+    editor_gesture(); tap(BUTTON_POWER);
+    ui_ticks(0, STATUS_EDITOR_BLINK_TICKS * 8);
+    editor_gesture(); drain();
+    assert(writes == before); /* Transient indicator state is never persisted. */
+}
 static void test_editor_chord_rearming(void)
 {
     dimmer_state_t s = {50, 1, BREATHE_MODE | 6u, 10, 100};
@@ -617,8 +658,9 @@ static void test_custom_bounds_mode_entry(void)
     for (i = 0; i < sizeof limits / sizeof limits[0]; ++i) {
         fresh(); s.minimum = limits[i][0]; s.maximum = limits[i][1];
         storage_request(&s, 1); drain(); (void)boot();
-        hold_mode();
+        ui_ticks(BUTTON_POWER, BUTTON_DEBOUNCE_TICKS + BUTTON_MODE_TICKS);
         assert(dimmer_output() == dimmer_duty(limits[i][2]));
+        ui_ticks(0, BUTTON_DEBOUNCE_TICKS);
         hold_mode();
         assert(dimmer_output() == dimmer_duty(50));
     }
@@ -649,6 +691,130 @@ static void test_all_editor_ranges(void)
                     assert((selection == 1 ? dimmer_state()->minimum : dimmer_state()->maximum) == expected);
                 }
             }
+        }
+    }
+}
+/* Independent double-precision cosine reference; twelve Taylor terms are
+   sufficient on 0..pi and need no host-specific math-library linker option. */
+static double reference_sine(unsigned phase)
+{
+    double angle, term = 1, cosine = 1;
+    unsigned k;
+    if (phase > BREATHE_PHASE_STEPS / 2) phase = BREATHE_PHASE_STEPS - phase;
+    angle = phase * 2 * 3.14159265358979323846 / BREATHE_PHASE_STEPS;
+    for (k = 1; k <= 12; ++k) {
+        term *= -angle * angle / ((2 * k - 1) * (2 * k));
+        cosine += term;
+    }
+    return (1 - cosine) / 2;
+}
+static void test_sine_curve_and_levels(void)
+{
+    dimmer_state_t s = {50, 1, BREATHE_MODE | 6u, 10, 100};
+    const uint8_t ranges[][2] = {{0, 100}, {10, 100}, {99, 100}, {0, 1}};
+    uint8_t seen[BOARD_PWM_PERIOD + 1];
+    button_events_t e = {0};
+    unsigned phase, span, weight, previous = 0, actual, ideal, range, tick, count;
+    int error;
+    double weight_error;
+    for (phase = 0; phase < BREATHE_PHASE_STEPS; ++phase) {
+        weight = dimmer_sine((uint16_t)phase);
+        assert(weight <= 512);
+        if (phase <= BREATHE_PHASE_STEPS / 2) assert(weight >= previous && weight <= previous + 1);
+        else assert(weight <= previous && weight + 1 >= previous);
+        previous = weight;
+        assert(weight == dimmer_sine((uint16_t)((BREATHE_PHASE_STEPS - phase) % BREATHE_PHASE_STEPS)));
+        weight_error = weight - 512 * reference_sine(phase);
+        assert(weight_error >= -1.8 && weight_error <= 1.8);
+        for (span = 1; span <= BOARD_PWM_PERIOD; ++span) {
+            actual = (weight * span + 256) / 512;
+            ideal = (unsigned)(reference_sine(phase) * span + 0.5);
+            error = (int)actual - (int)ideal;
+            assert(error >= -2 && error <= 2);
+        }
+    }
+    assert(dimmer_sine(0) == 0 && dimmer_sine(512) == 256 && dimmer_sine(1024) == 512);
+    for (range = 0; range < sizeof ranges / sizeof ranges[0]; ++range) {
+        s.minimum = ranges[range][0]; s.maximum = ranges[range][1];
+        memset(seen, 0, sizeof seen); dimmer_init(&s);
+        for (tick = 0; tick < BREATHE_DEFAULT_PERIOD * BREATHE_STEP_TICKS; ++tick) {
+            actual = dimmer_output();
+            assert(actual >= dimmer_duty(s.minimum) && actual <= dimmer_duty(s.maximum));
+            ideal = dimmer_duty(s.minimum) + (unsigned)(reference_sine(dimmer_phase()) *
+                    (dimmer_duty(s.maximum) - dimmer_duty(s.minimum)) + 0.5);
+            error = (int)actual - (int)ideal;
+            assert(error >= -2 && error <= 2);
+            seen[actual] = 1;
+            (void)dimmer_tick(&e);
+        }
+        count = 0;
+        for (actual = 0; actual <= BOARD_PWM_PERIOD; ++actual) count += seen[actual];
+        assert(seen[dimmer_duty(s.minimum)] && seen[dimmer_duty(s.maximum)]);
+        assert(count == (unsigned)(dimmer_duty(s.maximum) - dimmer_duty(s.minimum)) + 1);
+        if (range == 0) assert(count == 401);
+        else if (range == 1) assert(count == 361);
+        else assert(count == 5);
+    }
+}
+static void test_sine_timing_and_entry(void)
+{
+    dimmer_state_t s = {50, 1, BREATHE_MODE | 1u, 10, 100};
+    button_events_t e = {0};
+    uint8_t seen[BREATHE_PHASE_STEPS];
+    unsigned period, ticks, tick, count, low, high, brightness, target;
+    int error;
+    for (period = 1; period <= BREATHE_MAX_PERIOD; ++period) {
+        s.breath = (uint8_t)(BREATHE_MODE | period); dimmer_init(&s);
+        ticks = period * BREATHE_STEP_TICKS;
+        memset(seen, 0, sizeof seen);
+        for (tick = 0; tick < ticks; ++tick) {
+            assert(dimmer_phase() == (uint32_t)tick * BREATHE_PHASE_STEPS / ticks);
+            seen[dimmer_phase()] = 1;
+            (void)dimmer_tick(&e);
+        }
+        assert(!dimmer_phase());
+        count = 0; for (tick = 0; tick < BREATHE_PHASE_STEPS; ++tick) count += seen[tick];
+        assert(count == (ticks < BREATHE_PHASE_STEPS ? ticks : BREATHE_PHASE_STEPS));
+    }
+    e.down = e.held = BUTTON_POWER;
+    s.breath = BREATHE_DEFAULT_PERIOD;
+    for (low = 0; low < 100; ++low) {
+        for (high = low + 1; high <= 100; ++high) {
+            s.minimum = (uint8_t)low; s.maximum = (uint8_t)high;
+            for (brightness = 10; brightness <= 100; ++brightness) {
+                s.brightness = (uint8_t)brightness; dimmer_init(&s);
+                (void)dimmer_tick(&e);
+                target = brightness < low ? low : brightness > high ? high : brightness;
+                error = (int)dimmer_output() - dimmer_duty((uint8_t)target);
+                assert(error >= -3 && error <= 3);
+            }
+        }
+    }
+}
+static void test_breathing_duty_coverage(void)
+{
+    dimmer_state_t s = {50, 1, BREATHE_MODE | 1u, 0, 100};
+    button_events_t e = {0};
+    uint8_t seen[BOARD_PWM_PERIOD + 1];
+    unsigned period, span, tick, duty, count;
+    /* An offset translates duties without changing coverage, so every percentage
+       span covers all 5,050 endpoint pairs without repeating identical work. */
+    for (period = 1; period <= BREATHE_MAX_PERIOD; ++period) {
+        s.breath = (uint8_t)(BREATHE_MODE | period);
+        for (span = 1; span <= 100; ++span) {
+            s.maximum = (uint8_t)span;
+            dimmer_init(&s); memset(seen, 0, sizeof seen);
+            for (tick = 0; tick < period * BREATHE_STEP_TICKS; ++tick) {
+                duty = dimmer_output();
+                assert(duty <= 4u * span);
+                seen[duty] = 1;
+                (void)dimmer_tick(&e);
+            }
+            assert(!dimmer_phase() && seen[0] && seen[4u * span]);
+            count = 0;
+            for (duty = 0; duty <= 4u * span; ++duty) count += seen[duty];
+            if (period >= 3) assert(count == 4u * span + 1);
+            else if (span == 100) assert(count == (period == 1 ? 293u : 391u));
         }
     }
 }
@@ -1131,12 +1297,16 @@ static void test_failed_writes(void)
 int main(void)
 {
     test_pwm_scaling();
+    test_sine_curve_and_levels();
+    test_sine_timing_and_entry();
+    test_breathing_duty_coverage();
     test_buttons_and_dimming();
     test_chords();
     test_power_long_hold_event();
     test_power_overlap();
     test_settings_reset();
     test_editor_gestures_and_save();
+    test_editor_status_blink();
     test_editor_chord_rearming();
     test_editor_bounds_and_ramping();
     test_custom_bounds_mode_entry();

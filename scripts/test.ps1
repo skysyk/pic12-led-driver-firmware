@@ -27,4 +27,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Host compilation failed.' }
     & './build/test_firmware.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Firmware tests failed.' }
+    & $Compiler @prefixArgs @options '-Itests/fake_pic' '-Wno-unknown-pragmas' tests/test_hw.c -o build/test_hw.exe
+    if ($LASTEXITCODE -ne 0) { throw 'Hardware-register model compilation failed.' }
+    & './build/test_hw.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Hardware-register model tests failed.' }
+    & $Compiler @prefixArgs @options '-Itests/fake_pic' '-Wno-unknown-pragmas' firmware/buttons.c firmware/dimmer.c firmware/storage.c tests/test_main.c -o build/test_main.exe
+    if ($LASTEXITCODE -ne 0) { throw 'Main-loop integration compilation failed.' }
+    & './build/test_main.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Main-loop integration tests failed.' }
 } finally { Pop-Location }

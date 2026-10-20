@@ -16,7 +16,7 @@ These checks are pending; compilation and host simulation cannot verify them.
    cancel. Scope GP2 through boot/reset and button activity.
 4. With the main load disconnected, program `led-controller.hex`. With erased
    EEPROM, confirm GP2 is inactive at boot and the status LED stays off normally.
-   Scope 10%, 50%, and 100% commands; intermediate PWM should be about 37.736 kHz,
+   Scope 10%, 50%, and 100% commands; intermediate PWM should be about 20 kHz,
    maximum should be a static active level, and off a static inactive level.
 5. Reconnect the load with a suitable current-limited supply. Check taps, holds,
    both limits, power priority with staggered releases and a held brightness
@@ -50,8 +50,17 @@ These checks are pending; compilation and host simulation cannot verify them.
   Turning off cancels the flash, and waking/restoring a mode must not flash.
 - Tap up/down to traverse all 20 periods, including wraparound at 0.5/10 seconds.
   Scope complete rise-and-fall cycles, including 0.499712 and 9.994240 seconds
-  nominally, and verify the 37.736 kHz carrier is unchanged. Check smoothness at
+  nominally, and verify the 20 kHz carrier stays constant. Check smoothness at
   both extremes and button response while the animation and EEPROM writes run.
+- Verify the sine envelope slows near both endpoints and starts near the clamped
+  steady brightness on mode entry. At slow periods, scope the individual raw PWM
+  levels: a 99–100% range should use all five duties 396..400 rather than only the
+  two integer-percent endpoints. At periods of 1.5 seconds and longer, check that
+  every duty appears (401 over 0–100%, 361 over 10–100%). The 2,048-phase envelope
+  skips some positions at periods below 2.5 seconds; 0.5/1-second full-range cycles
+  use only 293/391 duties because of the rendering interval. Check that controls
+  and EEPROM activity do not stretch the cycle or miss Timer0 ticks, including at
+  the shortest period.
 - Confirm both-button cancellation and power priority during period changes.
   A brightness button in standby must wake the saved breathing mode and adjust
   its period, without changing steady brightness.
@@ -61,10 +70,14 @@ These checks are pending; compilation and host simulation cannot verify them.
   period to 3 seconds until changed. Animation must not create journal entries.
 - While breathing, hold both brightness buttons for about one second to enter
   minimum editing. The status LED must light and the output become steady at that
-  limit. A power tap selects maximum editing; up/down taps change by 10 percentage
+  limit. A power tap selects maximum editing; the status LED must blink with
+  approximately 250 ms on/off phases while the main LEDs stay at the selected
+  brightness. Selecting minimum returns to solid indication. Up/down taps change by 10 percentage
   points, holds ramp by 1% without crossing the other limit. Test 0% minimum and
   100% maximum, a one-point range, and coarse steps near either boundary.
   Power taps/holds in the editor must not turn off or change breathing mode.
+  Test adjustments and selection changes during a dark indicator phase. Blinking
+  must remain responsive and must not cause EEPROM writes.
 - Hold both again to save and resume; neither gesture may retrigger while still
   held. The status LED must go off on exit. Staggered releases must not change
   period or limits. Release/repress only one brightness button while holding the
@@ -90,3 +103,20 @@ These checks are pending; compilation and host simulation cannot verify them.
 - Keep holding well past completion and verify no retrigger or additional journal
   writes. Confirm an on-state hold switches mode once and cannot reset; a new
   hold after a tap has turned off must still reset normally.
+
+## Watchdog recovery acceptance
+
+- With the load disconnected, use a temporary fault-injection build to stop
+  Timer2 during an intermediate PWM update. Verify GP2 is forced inactive within
+  roughly 1 ms, CCP1 is disconnected, and reset follows after about one second.
+  Repeat starting from static full-on and active PWM. Watchdog timing varies with
+  LFINTOSC tolerance; the host model does not measure it.
+- Stop Timer0 interrupts while leaving foreground polling active. Verify that
+  idle polling cannot keep the watchdog alive and the controller restarts.
+- Confirm that the last valid EEPROM settings restore after recovery, including
+  power state, and that firmware recovery does not initialize or erase settings.
+  Repeat around asynchronous EEPROM commits and verify fallback after interrupted
+  writes. Check the external gate bias holds the load off during reset.
+- Restore the production image after fault injection and verify long steady and
+  breathing operation, all buttons, editing, reset holds, and EEPROM saves do
+  not produce unwanted watchdog resets. Confirm normal cycle timing is unchanged.

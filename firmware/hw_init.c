@@ -15,7 +15,7 @@
 
 static volatile uint8_t pending_ticks;
 static uint8_t gpio_shadow;
-static uint8_t last_duty;
+static uint16_t last_duty;
 
 void __interrupt() timer_isr(void)
 {
@@ -54,11 +54,13 @@ void hw_init(void)
     TRISIO = BOARD_INPUT_MASK;
     EECON1 = 0;
     pending_ticks = 0;
-    last_duty = 255u;
+    last_duty = 0xffffu;
     TMR0 = 0;
     INTCONbits.T0IF = 0;
     INTCONbits.T0IE = 1;
     INTCONbits.GIE = 1;
+    WDTCON = BOARD_WATCHDOG_CONTROL;
+    CLRWDT();
 }
 
 uint8_t hw_take_tick(void)
@@ -81,10 +83,8 @@ uint8_t hw_buttons(void)
     return (uint8_t)((raw >> 3) & (BUTTON_POWER | BUTTON_BRIGHTNESS));
 }
 
-void hw_render(uint8_t duty, uint8_t indicator)
+void hw_render(uint16_t duty, uint8_t indicator)
 {
-    uint8_t hardware_duty;
-    uint8_t level;
 #if BOARD_INDICATOR_ONLY
     duty = 0;
 #endif
@@ -95,20 +95,36 @@ void hw_render(uint8_t duty, uint8_t indicator)
     if (duty == last_duty) return;
     last_duty = duty;
     if (duty == 0 || duty >= BOARD_PWM_PERIOD) {
-        level = (uint8_t)((duty != 0) == BOARD_PWM_ACTIVE_HIGH);
-        if (level) gpio_shadow |= BOARD_PWM_MASK;
+#if BOARD_PWM_ACTIVE_HIGH
+        if (duty) gpio_shadow |= BOARD_PWM_MASK;
+#else
+        if (!duty) gpio_shadow |= BOARD_PWM_MASK;
+#endif
         else gpio_shadow &= (uint8_t)~BOARD_PWM_MASK;
         GPIO = gpio_shadow;
         CCP1CON = 0; /* Static endpoint gives true 0% and 100%. */
     } else {
-        hardware_duty = duty;
-        if (!BOARD_PWM_ACTIVE_HIGH) hardware_duty = BOARD_PWM_PERIOD - hardware_duty;
+        uint8_t polls = 0;
+        if (!BOARD_PWM_ACTIVE_HIGH) duty = BOARD_PWM_PERIOD - duty;
         /* Update shortly after a PWM boundary so the two duty fields latch
            together at the following boundary. Timer2 IRQ remains disabled. */
         PIR1bits.TMR2IF = 0;
-        while (!PIR1bits.TMR2IF) { }
-        CCPR1L = (uint8_t)(hardware_duty >> 2);
-        CCP1CON = (uint8_t)(0x0cu | ((hardware_duty & 3u) << 4));
+        while (!PIR1bits.TMR2IF) {
+            /* A byte-sized budget bounds the wait even if Timer0 also stops. */
+            if (--polls == 0) {
+#if BOARD_PWM_ACTIVE_HIGH
+                gpio_shadow &= (uint8_t)~BOARD_PWM_MASK;
+#else
+                gpio_shadow |= BOARD_PWM_MASK;
+#endif
+                GPIO = gpio_shadow;
+                CCP1CON = 0;
+                /* Leave the output off until the independent watchdog resets. */
+                for (;;) { NOP(); }
+            }
+        }
+        CCPR1L = (uint8_t)(duty >> 2);
+        CCP1CON = (uint8_t)(0x0cu | ((duty & 3u) << 4));
     }
 }
 
@@ -124,7 +140,7 @@ uint8_t hal_eeprom_read(uint8_t address)
 
 void hal_eeprom_start_write(uint8_t address, uint8_t value)
 {
-    uint8_t gie = INTCONbits.GIE;
+    uint8_t interrupts = INTCON;
     EEADR = address;
     EEDAT = value;
     EECON1bits.WREN = 1;
@@ -133,6 +149,6 @@ void hal_eeprom_start_write(uint8_t address, uint8_t value)
     EECON2 = 0xaa;
     EECON1bits.WR = 1;
     EECON1bits.WREN = 0;
-    if (gie) INTCONbits.GIE = 1;
+    if (interrupts & 0x80u) INTCONbits.GIE = 1;
 }
 #endif

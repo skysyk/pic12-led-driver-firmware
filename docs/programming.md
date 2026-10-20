@@ -5,11 +5,13 @@ the locally built open-source MiniPro executable. Use the appropriate DIP8 or
 SOIC8-to-DIP adapter and correct socket placement. Keep the target off the powered
 LED board while programming. The script never selects ICSP mode.
 
-The current controller, with one-second mode switching and the mode-change flash,
-was programmed and verified with this script on 2026-10-19, preserving EEPROM
-and user IDs.
-The run is recorded in `validation.md`; board
-acceptance checks remain pending.
+The current 20 kHz / 2,048-phase sine controller, including watchdog recovery and
+maximum-editor blinking, was programmed and verified with this script at
+2026-10-20T03:42:13Z (October 19 local time), preserving EEPROM and user IDs.
+The run is recorded in `validation.md`; board acceptance and physical watchdog
+tests remain pending. The indicator-only build has been built and host-tested
+but has not been programmed. The software-enabled watchdog retains configuration
+`0x33C4`.
 
 ## Commands
 

@@ -7,5 +7,7 @@ void hal_eeprom_start_write(uint8_t address, uint8_t value);
 void hw_init(void);
 uint8_t hw_take_tick(void);
 uint8_t hw_buttons(void);
-void hw_render(uint8_t duty, uint8_t indicator);
+void hw_render(uint16_t duty, uint8_t indicator);
+/* Device header supplies the single-instruction watchdog clear. */
+#define hw_watchdog_feed() CLRWDT()
 #endif

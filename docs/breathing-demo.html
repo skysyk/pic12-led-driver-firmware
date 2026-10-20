@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triangle vs sine breathing</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: light-dark(#f4f6fa, #10131b);
+    --surface: light-dark(#fff, #191e2a);
+    --ink: light-dark(#192234, #e9edf6);
+    --subtle: light-dark(#566176, #a6b1c7);
+    --line: light-dark(#d9dfeb, #343e52);
+    --triangle: light-dark(#007e8a, #65d7e1);
+    --sine: light-dark(#b34f17, #ffaf77);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 940px; margin: auto; padding: 30px 24px; }
+  h1 { font-size: clamp(24px, 4vw, 34px); line-height: 1.2; margin: 0 0 8px; font-weight: 600; }
+  h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  p { margin: 0; }
+  .muted { color: var(--subtle); }
+  .lamps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 24px 0 20px; }
+  .lamp-panel { min-width: 0; }
+  .panel-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .value { font-variant-numeric: tabular-nums; }
+  .stage { position: relative; height: 168px; display: grid; place-items: center; background: #080b11; border-radius: 16px; overflow: hidden; }
+  .bulb-base, .bulb { position: absolute; width: 78px; height: 78px; border-radius: 50%; }
+  .bulb-base { background: #171c27; box-shadow: 0 0 0 1px #343d50; }
+  .bulb { background: #fff1d4; box-shadow: 0 0 25px 12px #fff1d455, 0 0 65px 22px #ffe0a522; opacity: 0.1; }
+  /* No CSS brightness transitions: the actual discrete phase steps stay visible. */
+  .panel-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 13px; color: var(--subtle); }
+  .plot-header, .playback, .legend { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; }
+  .plot-header { justify-content: space-between; margin-bottom: 8px; }
+  .legend { font-size: 13px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 20px; height: 3px; display: inline-block; }
+  .plot { width: 100%; display: block; overflow: visible; }
+  .plot text { fill: var(--subtle); font: 12px system-ui, sans-serif; }
+  .controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 26px; padding-top: 20px; border-top: 1px solid var(--line); }
+  label { display: block; min-width: 0; }
+  .label-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  input[type="range"] { width: 100%; margin: 8px 0; accent-color: var(--triangle); }
+  select, button { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-height: 42px; padding: 8px 12px; }
+  select { width: 100%; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--subtle); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--triangle); outline-offset: 3px; }
+  .playback { margin: 20px 0 14px; }
+  .quantize { display: inline-flex; align-items: center; gap: 8px; }
+  .quantize input { accent-color: var(--triangle); width: 17px; height: 17px; }
+  .metrics { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 14px; padding: 12px 0; }
+  .notes { font-size: 13px; color: var(--subtle); max-width: 80ch; }
+  .warning { color: var(--sine); }
+  @media (max-width: 520px) {
+    main { padding: 22px 16px; }
+    .lamps { gap: 12px; }
+    .stage { height: 142px; }
+    .panel-title { flex-wrap: wrap; gap: 0 8px; }
+    .controls { grid-template-columns: 1fr; gap: 14px; }
+    .panel-meta { display: block; }
+    .panel-meta span { display: block; }
+    .bulb-base, .bulb { width: 62px; height: 62px; }
+  }
+</style>
+</head>
+<body>
+<main id="breathing-demo">
+  <h1>Triangle vs sine breathing</h1>
+  <p class="muted">Two lights, synchronized. Change the phase count to reveal the steps.</p>
+  <div class="lamps">
+    <section class="lamp-panel" aria-label="Triangle breathing preview">
+      <div class="panel-title"><h2>Triangle</h2><output id="triangle-value" class="value">10%</output></div>
+      <div class="stage" aria-hidden="true"><div class="bulb-base"></div><div class="bulb" id="triangle-bulb"></div></div>
+      <div class="panel-meta"><span>Linear rise and fall</span><span id="triangle-levels" class="value"></span></div>
+    </section>
+    <section class="lamp-panel" aria-label="Sine breathing preview">
+      <div class="panel-title"><h2>Sine</h2><output id="sine-value" class="value">10%</output></div>
+      <div class="stage" aria-hidden="true"><div class="bulb-base"></div><div class="bulb" id="sine-bulb"></div></div>
+      <div class="panel-meta"><span>Slows near the ends</span><span id="sine-levels" class="value"></span></div>
+    </section>
+  </div>
+  <div class="plot-header">
+    <span>Brightness over one full cycle</span>
+    <div class="legend" aria-label="Waveform legend">
+      <span><i class="swatch" style="background:var(--triangle)"></i>Triangle</span>
+      <span><i class="swatch" style="background:var(--sine)"></i>Sine</span>
+    </div>
+  </div>
+  <svg id="wave-plot" class="plot" role="img" aria-labelledby="plot-title plot-description">
+    <title id="plot-title">Sampled triangle and sine brightness</title>
+    <desc id="plot-description">Brightness percentage versus time. Both waveforms start at minimum, reach maximum halfway through, and return to minimum. The vertical cursor follows the live lights.</desc>
+    <g id="plot-static"></g>
+    <line id="playhead" stroke="var(--subtle)" stroke-width="1" stroke-dasharray="3 4"></line>
+    <circle id="triangle-dot" r="5" fill="var(--triangle)" stroke="var(--bg)" stroke-width="2"></circle>
+    <circle id="sine-dot" r="4" fill="var(--sine)" stroke="var(--bg)" stroke-width="2"></circle>
+  </svg>
+  <div class="controls">
+    <label for="steps"><span class="label-row"><span>Phase steps per full cycle</span><span id="steps-value" class="value">256</span></span>
+      <select id="steps">
+        <option value="4">4 steps</option><option value="8">8 steps</option><option value="16">16 steps</option>
+        <option value="32">32 steps</option><option value="64">64 steps</option><option value="128">128 steps</option>
+        <option value="256" selected>256 steps — current firmware</option><option value="512">512 steps</option>
+        <option value="1024">1,024 steps</option><option value="2048">2,048 steps</option>
+      </select>
+    </label>
+    <label for="period"><span class="label-row"><span>Full cycle period</span><output id="period-value" class="value">3.0 s</output></span>
+      <input id="period" type="range" min="0.5" max="10" step="0.5" value="3">
+    </label>
+    <label for="minimum"><span class="label-row"><span>Minimum brightness</span><output id="minimum-value" class="value">10%</output></span>
+      <input id="minimum" type="range" min="0" max="99" step="1" value="10">
+    </label>
+    <label for="maximum"><span class="label-row"><span>Maximum brightness</span><output id="maximum-value" class="value">100%</output></span>
+      <input id="maximum" type="range" min="1" max="100" step="1" value="100">
+    </label>
+  </div>
+  <div class="playback">
+    <button id="pause" type="button">Pause</button>
+    <button id="step" type="button">Advance one phase</button>
+    <label class="quantize"><input id="quantize" type="checkbox" checked>Round to whole % (current firmware)</label>
+  </div>
+  <div class="metrics value" id="metrics" aria-live="polite"></div>
+  <p class="notes">Default triangle settings match the firmware envelope: 256 phases, 3-second cycle, 10–100%, rounded to whole percentages. Turning rounding off isolates phase resolution. Above 256 phases is a hypothetical firmware change; above 976.6 updates/s also exceeds its current timebase. The preview uses screen opacity, so it is not calibrated LED brightness. Your screen may hide fast intermediate updates; the plot still shows the steps.</p>
+  <noscript>This interactive comparison needs JavaScript enabled.</noscript>
+</main>
+<script>
+(() => {
+  'use strict';
+  const root = document.getElementById('breathing-demo');
+  const byId = id => root.querySelector('#' + id);
+  const controls = Object.fromEntries(['steps', 'period', 'minimum', 'maximum', 'quantize'].map(id => [id, byId(id)]));
+  const state = {steps: 256, period: 3, minimum: 10, maximum: 100, quantize: true};
+  const tickMs = 1.024;
+  let playing = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let originTime = performance.now(), originPhase = 0;
+  let geometry = {left: 46, top: 12, width: 1, height: 150};
+  const actualPeriodMs = () => Math.round(state.period * 2) * 488 * tickMs;
+  const phaseAt = now => (originPhase + (playing ? (now - originTime) / actualPeriodMs() : 0)) % 1;
+  const shape = (kind, phase) => kind === 'triangle' ? 1 - Math.abs(2 * phase - 1) : (1 - Math.cos(2 * Math.PI * phase)) / 2;
+  function brightness(kind, phase) {
+    const value = state.minimum + (state.maximum - state.minimum) * shape(kind, phase);
+    return state.quantize ? Math.round(value) : value;
+  }
+  const sample = (kind, phase) => brightness(kind, Math.floor(phase * state.steps) / state.steps);
+  const xFor = phase => geometry.left + phase * geometry.width;
+  const yFor = percent => geometry.top + geometry.height * (1 - percent / 100);
+  const node = (tag, attrs, text) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, value));
+    if (text !== undefined) el.textContent = text;
+    return el;
+  };
+  function drawPlot() {
+    const width = Math.max(240, byId('wave-plot').getBoundingClientRect().width);
+    const height = 208;
+    geometry = {left: 46, top: 12, width: width - 60, height: 150};
+    byId('wave-plot').setAttribute('viewBox', `0 0 ${width} ${height}`);
+    const group = byId('plot-static');
+    group.replaceChildren();
+    for (const value of [0, 50, 100]) {
+      group.append(node('line', {x1: xFor(0), y1: yFor(value), x2: xFor(1), y2: yFor(value), stroke: 'var(--line)'}));
+      group.append(node('text', {x: geometry.left - 9, y: yFor(value) + 4, 'text-anchor': 'end'}, value + '%'));
+    }
+    for (const [phase, label] of [[0, '0'], [0.5, (state.period / 2).toFixed(2).replace(/0$/, '')], [1, state.period.toFixed(1)]]) {
+      group.append(node('text', {x: xFor(phase), y: 183, 'text-anchor': phase === 0 ? 'start' : phase === 1 ? 'end' : 'middle'}, label));
+    }
+    group.append(node('text', {x: xFor(0.5), y: 204, 'text-anchor': 'middle'}, 'Time (seconds, nominal)'));
+    for (const kind of ['triangle', 'sine']) {
+      let path = `M ${xFor(0)} ${yFor(brightness(kind, 0))}`;
+      const levels = new Set();
+      for (let i = 0; i < state.steps; ++i) {
+        const value = brightness(kind, i / state.steps);
+        levels.add(value.toFixed(8));
+        path += ` H ${xFor((i + 1) / state.steps)} V ${yFor(brightness(kind, ((i + 1) % state.steps) / state.steps))}`;
+      }
+      group.append(node('path', {d: path, fill: 'none', stroke: `var(--${kind})`, 'stroke-width': 2, 'stroke-linejoin': 'round'}));
+      byId(kind + '-levels').textContent = levels.size + ' distinct levels';
+    }
+    const rate = state.steps / (actualPeriodMs() / 1000);
+    byId('metrics').replaceChildren();
+    const rateText = document.createElement('span');
+    rateText.textContent = `${rate.toFixed(1)} internal phase updates/s`;
+    byId('metrics').append(rateText);
+    const interval = document.createElement('span');
+    interval.textContent = `${(actualPeriodMs() / state.steps).toFixed(2)} ms per phase`;
+    byId('metrics').append(interval);
+    if (rate > 1000 / tickMs) {
+      const warning = document.createElement('span');
+      warning.className = 'warning';
+      warning.textContent = 'Above the current firmware tick rate';
+      byId('metrics').append(warning);
+    }
+  }
+  function render(now) {
+    const phase = phaseAt(now);
+    for (const kind of ['triangle', 'sine']) {
+      const value = sample(kind, phase);
+      byId(kind + '-bulb').style.opacity = value / 100;
+      byId(kind + '-value').value = `${state.quantize ? value : value.toFixed(1)}%`;
+      byId(kind + '-dot').setAttribute('cx', xFor(phase));
+      byId(kind + '-dot').setAttribute('cy', yFor(value));
+    }
+    byId('playhead').setAttribute('x1', xFor(phase));
+    byId('playhead').setAttribute('x2', xFor(phase));
+    byId('playhead').setAttribute('y1', geometry.top);
+    byId('playhead').setAttribute('y2', geometry.top + geometry.height);
+  }
+  function pauseAt(now) {
+    originPhase = phaseAt(now);
+    originTime = now;
+  }
+  function updateControls(event) {
+    const now = performance.now();
+    pauseAt(now);
+    state.steps = Number(controls.steps.value);
+    state.period = Number(controls.period.value);
+    if (event.target === controls.minimum) state.minimum = Math.min(Number(controls.minimum.value), state.maximum - 1);
+    if (event.target === controls.maximum) state.maximum = Math.max(Number(controls.maximum.value), state.minimum + 1);
+    state.quantize = controls.quantize.checked;
+    controls.minimum.value = state.minimum;
+    controls.maximum.value = state.maximum;
+    byId('steps-value').textContent = state.steps.toLocaleString();
+    byId('period-value').value = state.period.toFixed(1) + ' s';
+    byId('minimum-value').value = state.minimum + '%';
+    byId('maximum-value').value = state.maximum + '%';
+    drawPlot();
+    render(now);
+  }
+  Object.values(controls).forEach(control => control.addEventListener('input', updateControls));
+  byId('pause').addEventListener('click', () => {
+    const now = performance.now();
+    pauseAt(now);
+    playing = !playing;
+    byId('pause').textContent = playing ? 'Pause' : 'Play';
+    render(now);
+  });
+  byId('step').addEventListener('click', () => {
+    const now = performance.now();
+    pauseAt(now);
+    playing = false;
+    originPhase = ((Math.floor(originPhase * state.steps) + 1) % state.steps) / state.steps;
+    byId('pause').textContent = 'Play';
+    render(now);
+  });
+  byId('pause').textContent = playing ? 'Pause' : 'Play';
+  new ResizeObserver(() => {drawPlot(); render(performance.now());}).observe(byId('wave-plot'));
+  function frame(now) {render(now); requestAnimationFrame(frame);}
+  drawPlot();
+  render(originTime);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

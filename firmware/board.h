@@ -18,8 +18,8 @@
 #define BOARD_INPUT_MASK 0x3au /* GP1 remains high impedance */
 
 #define _XTAL_FREQ 8000000UL
-/* 8 MHz / (4 * 1 * 53) = 37,735.849 Hz (nearest to 38 kHz). */
-#define BOARD_PWM_PR2 52u
+/* 8 MHz / (4 * 1 * 100) = 20,000 Hz; 400 duty intervals. */
+#define BOARD_PWM_PR2 99u
 #define BOARD_PWM_PERIOD (4u * (BOARD_PWM_PR2 + 1u))
 /* Timer0 free-runs at Fosc/4, prescaler 1:8: 1024 us per overflow. */
 #define TICKS_FROM_MS(ms) (((ms) * 1000UL + 1023UL) / 1024UL)
@@ -29,13 +29,21 @@
 #define BUTTON_RESET_COMMIT_TICKS TICKS_FROM_MS(6000)
 #define STATUS_BLINK_TICKS TICKS_FROM_MS(500)
 #define STATUS_MODE_FLASH_TICKS TICKS_FROM_MS(500)
+#define STATUS_EDITOR_BLINK_TICKS TICKS_FROM_MS(250)
+/* LFINTOSC/32768: about 1.06 s, software enabled; config stays 0x33C4. */
+#define BOARD_WATCHDOG_CONTROL 0x15u
 #define BUTTON_RAMP_TICKS TICKS_FROM_MS(20)
 #define BUTTON_MODE_TICKS TICKS_FROM_MS(1000)
 #define BUTTON_EDITOR_TICKS TICKS_FROM_MS(1000)
 /* 488 Timer0 ticks = 499.712 ms; period is 1..20 half-second steps. */
 #define BREATHE_STEP_TICKS 488u
+/* Enough sine phases and Q9 amplitude precision to reach every PWM duty. */
+#define BREATHE_PHASE_STEPS 2048u
 #define BREATHE_DEFAULT_PERIOD 6u
 #define BREATHE_MAX_PERIOD 20u
+#if BREATHE_PHASE_STEPS != 2048u || BREATHE_MAX_PERIOD * BREATHE_STEP_TICKS + BREATHE_PHASE_STEPS > 65535u
+#error Sine timing requires 2048 phases and a sixteen-bit accumulator
+#endif
 #define BREATHE_MODE 128u
 #define BREATHE_PERIOD_MASK 31u
 #define STORAGE_DELAY_TICKS TICKS_FROM_MS(900)
@@ -64,10 +72,13 @@
 #if BUTTON_MODE_TICKS <= BUTTON_HOLD_TICKS || BUTTON_RESET_ARM_TICKS <= BUTTON_MODE_TICKS || BUTTON_RESET_COMMIT_TICKS <= BUTTON_RESET_ARM_TICKS || BUTTON_RESET_COMMIT_TICKS > 65535
 #error Reset hold must exceed the normal hold and fit a sixteen-bit counter
 #endif
-#if BOARD_PWM_PERIOD > 255u
-#error PWM duty counts must fit eight bits
+#if BOARD_PWM_PERIOD != 400u
+#error Percent-to-duty scaling requires a 400-count PWM period
 #endif
 #if STATUS_MODE_FLASH_TICKS < 1 || STATUS_MODE_FLASH_TICKS > 65535
 #error Mode flash interval must fit a sixteen-bit counter
+#endif
+#if STATUS_EDITOR_BLINK_TICKS < 1 || STATUS_EDITOR_BLINK_TICKS > 255
+#error Editor blink interval must fit the shared byte counter
 #endif
 #endif
