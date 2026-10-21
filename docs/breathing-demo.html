@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Triangle vs sine breathing</title>
+<title>LED breathing simulator</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -14,136 +14,278 @@
     --line: light-dark(#d9dfeb, #343e52);
     --triangle: light-dark(#007e8a, #65d7e1);
     --sine: light-dark(#b34f17, #ffaf77);
+    --breath: light-dark(#7545b1, #c6a0ff);
+    --exponential: light-dark(#287a3e, #90dd9b);
+    --white: 255, 228, 206;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
-  main { max-width: 940px; margin: auto; padding: 30px 24px; }
+  main { max-width: 1080px; margin: auto; padding: 30px 24px; }
   h1 { font-size: clamp(24px, 4vw, 34px); line-height: 1.2; margin: 0 0 8px; font-weight: 600; }
   h2 { margin: 0; font-size: 18px; font-weight: 600; }
   p { margin: 0; }
   .muted { color: var(--subtle); }
-  .lamps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 24px 0 20px; }
+  .lamps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin: 24px 0 20px; }
   .lamp-panel { min-width: 0; }
-  .panel-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .panel-title { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0 8px; margin-bottom: 10px; }
   .value { font-variant-numeric: tabular-nums; }
-  .stage { position: relative; height: 168px; display: grid; place-items: center; background: #080b11; border-radius: 16px; overflow: hidden; }
-  .bulb-base, .bulb { position: absolute; width: 78px; height: 78px; border-radius: 50%; }
-  .bulb-base { background: #171c27; box-shadow: 0 0 0 1px #343d50; }
-  .bulb { background: #fff1d4; box-shadow: 0 0 25px 12px #fff1d455, 0 0 65px 22px #ffe0a522; opacity: 0.1; }
-  /* No CSS brightness transitions: the actual discrete phase steps stay visible. */
-  .panel-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 13px; color: var(--subtle); }
+  .stage { width: 100%; padding: 0; position: relative; height: 168px; display: grid; place-items: center; background: #000; border-radius: 16px; overflow: hidden; }
+  .stage-label { position: absolute; bottom: 9px; color: #bac4d5; font-size: 12px; }
+  .bulb { width: 78px; height: 78px; border-radius: 50%; background: rgb(var(--white)); box-shadow: 0 0 25px 12px rgba(var(--white), .33), 0 0 65px 22px rgba(var(--white), .13); opacity: .1; }
+  /* No brightness transitions: the actual discrete commands stay visible. */
+  .panel-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 13px; color: var(--subtle); }
+  .panel-meta span { display: block; width: 100%; }
   .plot-header, .playback, .legend { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; }
   .plot-header { justify-content: space-between; margin-bottom: 8px; }
   .legend { font-size: 13px; }
-  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .legend input { accent-color: var(--curve-color); width: 17px; height: 17px; margin: 0; }
+  .legend input:not(:checked) ~ span { color: var(--subtle); }
   .swatch { width: 20px; height: 3px; display: inline-block; }
   .plot { width: 100%; display: block; overflow: visible; }
   .plot text { fill: var(--subtle); font: 12px system-ui, sans-serif; }
   .controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 26px; padding-top: 20px; border-top: 1px solid var(--line); }
+  .breath-controls { margin: 20px 0 0; padding: 14px 18px 18px; border: 1px solid var(--line); border-radius: 12px; }
+  .breath-controls legend { padding: 0 8px; font-weight: 600; }
+  .breath-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 26px; }
   label { display: block; min-width: 0; }
   .label-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
   input[type="range"] { width: 100%; margin: 8px 0; accent-color: var(--triangle); }
-  select, button { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-height: 42px; padding: 8px 12px; }
-  select { width: 100%; }
+  select, button, input[type="number"] { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-height: 42px; padding: 8px 12px; }
+  select, input[type="number"] { width: 100%; }
   button { cursor: pointer; }
   button:hover { border-color: var(--subtle); }
   button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--triangle); outline-offset: 3px; }
+  button:disabled, input:disabled { opacity: .5; cursor: default; }
   .playback { margin: 20px 0 14px; }
-  .quantize { display: inline-flex; align-items: center; gap: 8px; }
-  .quantize input { accent-color: var(--triangle); width: 17px; height: 17px; }
+  .check { display: inline-flex; align-items: center; gap: 8px; }
+  .check input { accent-color: var(--triangle); width: 17px; height: 17px; flex-shrink: 0; }
   .metrics { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 14px; padding: 12px 0; }
-  .notes { font-size: 13px; color: var(--subtle); max-width: 80ch; }
+  .notes { font-size: 13px; color: var(--subtle); max-width: 95ch; margin-top: 8px; }
   .warning { color: var(--sine); }
-  @media (max-width: 520px) {
+  #light-screen { position: fixed; inset: 0; margin: 0; border: 0; padding: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; background: #000; color: #fff; overflow: hidden; }
+  #light-screen::backdrop { background: #000; }
+  #screen-light { position: absolute; inset: 0; background: rgb(var(--white)); }
+  .screen-controls { position: absolute; inset: 0 0 auto; padding: 18px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; background: #000b; opacity: 0; transition: opacity .2s; }
+  #light-screen.show-controls .screen-controls, .screen-controls:focus-within { opacity: 1; }
+  .screen-controls button, .screen-controls select { background: #171c27; border-color: #526079; color: #fff; width: auto; }
+  .screen-controls label { display: flex; align-items: center; gap: 8px; }
+  #screen-status { font-size: 13px; flex-basis: 100%; }
+  @media (max-width: 900px) { .lamps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 620px) {
     main { padding: 22px 16px; }
-    .lamps { gap: 12px; }
+    .lamps { grid-template-columns: 1fr; gap: 18px; }
     .stage { height: 142px; }
-    .panel-title { flex-wrap: wrap; gap: 0 8px; }
     .controls { grid-template-columns: 1fr; gap: 14px; }
-    .panel-meta { display: block; }
-    .panel-meta span { display: block; }
-    .bulb-base, .bulb { width: 62px; height: 62px; }
+    .breath-options { grid-template-columns: 1fr; }
+    .panel-meta { justify-content: space-between; }
+    .panel-meta span { width: auto; }
+    .bulb { width: 62px; height: 62px; }
   }
+  @media (prefers-reduced-motion: reduce) { .screen-controls { transition: none; } }
 </style>
 </head>
 <body>
 <main id="breathing-demo">
-  <h1>Triangle vs sine breathing</h1>
-  <p class="muted">Two lights, synchronized. Change the phase count to reveal the steps.</p>
+  <h1>LED breathing simulator</h1>
+  <p class="muted">Four synchronized patterns. Click a light for a fullscreen lighting preview.</p>
   <div class="lamps">
     <section class="lamp-panel" aria-label="Triangle breathing preview">
-      <div class="panel-title"><h2>Triangle</h2><output id="triangle-value" class="value">10%</output></div>
-      <div class="stage" aria-hidden="true"><div class="bulb-base"></div><div class="bulb" id="triangle-bulb"></div></div>
+      <div class="panel-title"><h2>Triangle</h2><output id="triangle-value" class="value">10.000%</output></div>
+      <button class="stage" data-pattern="triangle" type="button" aria-label="Open Triangle in fullscreen"><span class="bulb" id="triangle-bulb"></span><span class="stage-label">Fullscreen ↗</span></button>
       <div class="panel-meta"><span>Linear rise and fall</span><span id="triangle-levels" class="value"></span></div>
     </section>
     <section class="lamp-panel" aria-label="Sine breathing preview">
-      <div class="panel-title"><h2>Sine</h2><output id="sine-value" class="value">10%</output></div>
-      <div class="stage" aria-hidden="true"><div class="bulb-base"></div><div class="bulb" id="sine-bulb"></div></div>
+      <div class="panel-title"><h2>Sine</h2><output id="sine-value" class="value">10.000%</output></div>
+      <button class="stage" data-pattern="sine" type="button" aria-label="Open Sine in fullscreen"><span class="bulb" id="sine-bulb"></span><span class="stage-label">Fullscreen ↗</span></button>
       <div class="panel-meta"><span>Slows near the ends</span><span id="sine-levels" class="value"></span></div>
+    </section>
+    <section class="lamp-panel" aria-label="Natural breath preview">
+      <div class="panel-title"><h2>Natural breath</h2><output id="breath-value" class="value">10.000%</output></div>
+      <button class="stage" data-pattern="breath" type="button" aria-label="Open Natural breath in fullscreen"><span class="bulb" id="breath-bulb"></span><span class="stage-label">Fullscreen ↗</span></button>
+      <div class="panel-meta"><span id="breath-profile">Smooth ramps · longer exhale</span><span id="breath-levels" class="value"></span></div>
+    </section>
+    <section class="lamp-panel" aria-label="Exponential breathing preview">
+      <div class="panel-title"><h2>Exponential</h2><output id="exponential-value" class="value">10.000%</output></div>
+      <button class="stage" data-pattern="exponential" type="button" aria-label="Open Exponential in fullscreen"><span class="bulb" id="exponential-bulb"></span><span class="stage-label">Fullscreen ↗</span></button>
+      <div class="panel-meta"><span>ThingPulse · exp(sin(t))</span><span id="exponential-levels" class="value"></span></div>
     </section>
   </div>
   <div class="plot-header">
     <span>Brightness over one full cycle</span>
-    <div class="legend" aria-label="Waveform legend">
-      <span><i class="swatch" style="background:var(--triangle)"></i>Triangle</span>
-      <span><i class="swatch" style="background:var(--sine)"></i>Sine</span>
+    <div class="legend" role="group" aria-label="Visible plot curves">
+      <label style="--curve-color:var(--triangle)"><input type="checkbox" data-curve="triangle" aria-controls="triangle-curve triangle-dot" checked><i class="swatch" style="background:var(--triangle)" aria-hidden="true"></i><span>Triangle</span></label>
+      <label style="--curve-color:var(--sine)"><input type="checkbox" data-curve="sine" aria-controls="sine-curve sine-dot" checked><i class="swatch" style="background:var(--sine)" aria-hidden="true"></i><span>Sine</span></label>
+      <label style="--curve-color:var(--breath)"><input type="checkbox" data-curve="breath" aria-controls="breath-curve breath-dot" checked><i class="swatch" style="background:var(--breath)" aria-hidden="true"></i><span>Natural breath</span></label>
+      <label style="--curve-color:var(--exponential)"><input type="checkbox" data-curve="exponential" aria-controls="exponential-curve exponential-dot" checked><i class="swatch" style="background:var(--exponential)" aria-hidden="true"></i><span>Exponential</span></label>
     </div>
   </div>
   <svg id="wave-plot" class="plot" role="img" aria-labelledby="plot-title plot-description">
-    <title id="plot-title">Sampled triangle and sine brightness</title>
-    <desc id="plot-description">Brightness percentage versus time. Both waveforms start at minimum, reach maximum halfway through, and return to minimum. The vertical cursor follows the live lights.</desc>
+    <title id="plot-title">Sampled triangle, sine, natural breath, and exponential brightness</title>
+    <desc id="plot-description">Brightness versus time after phase sampling and optional percentage and PWM rounding. Natural breath rises for 35%, holds at maximum for 6%, falls for 56%, and rests at minimum for 3% of a cycle. The cursor follows the live lights.</desc>
     <g id="plot-static"></g>
     <line id="playhead" stroke="var(--subtle)" stroke-width="1" stroke-dasharray="3 4"></line>
     <circle id="triangle-dot" r="5" fill="var(--triangle)" stroke="var(--bg)" stroke-width="2"></circle>
     <circle id="sine-dot" r="4" fill="var(--sine)" stroke="var(--bg)" stroke-width="2"></circle>
+    <circle id="breath-dot" r="4" fill="var(--breath)" stroke="var(--bg)" stroke-width="2"></circle>
+    <circle id="exponential-dot" r="4" fill="var(--exponential)" stroke="var(--bg)" stroke-width="2"></circle>
   </svg>
+  <p id="plot-empty" class="notes" role="status" hidden>No curves selected. Check a curve above to show it in the plot.</p>
   <div class="controls">
-    <label for="steps"><span class="label-row"><span>Phase steps per full cycle</span><span id="steps-value" class="value">256</span></span>
+    <label for="steps"><span class="label-row"><span>Phase steps per full cycle</span><span id="steps-value" class="value">2,048</span></span>
       <select id="steps">
         <option value="4">4 steps</option><option value="8">8 steps</option><option value="16">16 steps</option>
         <option value="32">32 steps</option><option value="64">64 steps</option><option value="128">128 steps</option>
-        <option value="256" selected>256 steps — current firmware</option><option value="512">512 steps</option>
-        <option value="1024">1,024 steps</option><option value="2048">2,048 steps</option>
+        <option value="256">256 steps</option><option value="512">512 steps</option>
+        <option value="1024">1,024 steps</option><option value="2048" selected>2,048 steps — firmware phase count</option>
       </select>
     </label>
     <label for="period"><span class="label-row"><span>Full cycle period</span><output id="period-value" class="value">3.0 s</output></span>
       <input id="period" type="range" min="0.5" max="10" step="0.5" value="3">
     </label>
-    <label for="minimum"><span class="label-row"><span>Minimum brightness</span><output id="minimum-value" class="value">10%</output></span>
-      <input id="minimum" type="range" min="0" max="99" step="1" value="10">
+    <label for="minimum"><span class="label-row"><span>Minimum brightness</span><output id="minimum-value" class="value">10.000%</output></span>
+      <input id="minimum" type="range" min="0" max="99" step="0.25" value="10">
     </label>
-    <label for="maximum"><span class="label-row"><span>Maximum brightness</span><output id="maximum-value" class="value">100%</output></span>
-      <input id="maximum" type="range" min="1" max="100" step="1" value="100">
+    <label for="maximum"><span class="label-row"><span>Maximum brightness</span><output id="maximum-value" class="value">100.000%</output></span>
+      <input id="maximum" type="range" min="1" max="100" step="0.25" value="100">
+    </label>
+    <label for="pwm-frequency"><span class="label-row"><span>PWM frequency (Hz)</span><span>8 MHz PIC clock</span></span>
+      <input id="pwm-frequency" type="number" min="489" max="100000" step="1" value="20000" aria-describedby="pwm-description">
+    </label>
+    <label for="cct"><span class="label-row"><span>White color temperature</span><span>Screen approximation</span></span>
+      <select id="cct"><option value="2700">2,700 K · warm</option><option value="3000">3,000 K · soft white</option><option value="4000" selected>4,000 K · neutral</option><option value="5000">5,000 K · daylight</option><option value="6500">6,500 K · cool</option></select>
     </label>
   </div>
+  <fieldset class="breath-controls">
+    <legend>Natural breath curve</legend>
+    <div class="breath-options">
+      <label for="peak-dwell"><span class="label-row"><span>Maximum dwell</span><output id="peak-dwell-value" class="value">6% · 0.180 s</output></span>
+        <input id="peak-dwell" type="range" min="0" max="45" step="0.5" value="6" aria-describedby="breath-timing">
+      </label>
+      <label for="min-dwell"><span class="label-row"><span>Minimum dwell</span><output id="min-dwell-value" class="value">3% · 0.090 s</output></span>
+        <input id="min-dwell" type="range" min="0" max="45" step="0.5" value="3" aria-describedby="breath-timing">
+      </label>
+    </div>
+    <label class="check"><input id="smooth-ramp" type="checkbox" checked>Smooth ramps (uncheck for linear / sharp)</label>
+    <p id="breath-timing" class="notes value">35% inhale · 6% peak hold · 56% exhale · 3% minimum rest. Total period: 3.0 s.</p>
+  </fieldset>
   <div class="playback">
     <button id="pause" type="button">Pause</button>
     <button id="step" type="button">Advance one phase</button>
-    <label class="quantize"><input id="quantize" type="checkbox" checked>Round to whole % (current firmware)</label>
+    <label class="check"><input id="quantize" type="checkbox">Round to whole %</label>
+    <label class="check"><input id="pwm" type="checkbox" checked>Apply PWM resolution</label>
+    <label class="check"><input id="dither" type="checkbox" checked>8-slot fractional duty</label>
   </div>
   <div class="metrics value" id="metrics" aria-live="polite"></div>
-  <p class="notes">Default triangle settings match the firmware envelope: 256 phases, 3-second cycle, 10–100%, rounded to whole percentages. Turning rounding off isolates phase resolution. Above 256 phases is a hypothetical firmware change; above 976.6 updates/s also exceeds its current timebase. The preview uses screen opacity, so it is not calibrated LED brightness. Your screen may hide fast intermediate updates; the plot still shows the steps.</p>
+  <p class="notes" id="pwm-description">PWM frequency accepts 489–100,000 Hz. Resolution uses an 8 MHz PIC12 Timer2 model: the smallest fitting 1:1, 1:4, or 1:16 prescaler and the nearest timer period, up to 1,024 duty counts. Within each prescaler range, higher carrier frequencies leave fewer duty counts. Fractional duty models the average of eight adjacent-count dither slots, as in the firmware; turn it off to see hardware-only levels. PWM rounding can move an endpoint by half a selected duty step.</p>
+  <p class="notes">Natural breath is an illustrative modified triangle. Dwell sliders allocate 0–45% of the cycle to each hold; minimum rest is split across the cycle boundary. The remaining time is divided between inhale and exhale in a 5:8 ratio, keeping the total cycle period fixed. Smooth ramps round the corners; linear ramps keep sharp corners. This is a design alternative, not a measured physiological trace.</p>
+  <p class="notes">Exponential follows <a href="https://thingpulse.com/breathing-leds-cracking-the-algorithm-behind-our-breathing-pattern/" target="_blank" rel="noopener noreferrer">ThingPulse’s breathing LED formula</a>: <code>(exp(sin(t)) − exp(−1)) / (e − exp(−1))</code>, scaled to the selected brightness limits. The phase is shifted to start at minimum and the time is scaled to the selected cycle period. This curve has a narrower peak and broader trough than sine; its rise and fall are symmetric. Dwell and ramp controls apply to Natural breath. The plot checkboxes control only curve and cursor-dot visibility.</p>
+  <p class="notes">The analytical curves use evenly spaced phase updates and the firmware’s nominal 1.024 ms timebase for cycle length. Actual firmware also skips phases at shorter periods and approximates sine with a table. This preview shows average duty using screen opacity; it does not reproduce carrier flicker, individual dither pulses, calibrated LED output, or calibrated CCT. Your display may hide fast intermediate updates; the plot and level counts retain them. Fullscreen controls fade after inactivity; move, tap, or press Tab to reveal them. Press Escape to exit or Space to pause.</p>
   <noscript>This interactive comparison needs JavaScript enabled.</noscript>
 </main>
+<dialog id="light-screen" tabindex="-1" aria-label="Fullscreen lighting simulation" aria-describedby="screen-status">
+  <div id="screen-light" aria-hidden="true"></div>
+  <div class="screen-controls">
+    <strong id="screen-name">Triangle</strong><output id="screen-value" class="value"></output>
+    <label>White <select id="screen-cct" aria-label="Fullscreen color temperature"></select></label>
+    <button id="screen-pause" type="button">Pause</button>
+    <button id="screen-exit" type="button" autofocus>Exit preview</button>
+    <span id="screen-status" role="status">Move or tap to show controls · Space to pause · Escape to exit</span>
+  </div>
+</dialog>
 <script>
 (() => {
   'use strict';
-  const root = document.getElementById('breathing-demo');
-  const byId = id => root.querySelector('#' + id);
-  const controls = Object.fromEntries(['steps', 'period', 'minimum', 'maximum', 'quantize'].map(id => [id, byId(id)]));
-  const state = {steps: 256, period: 3, minimum: 10, maximum: 100, quantize: true};
+  const byId = id => document.getElementById(id);
+  const kinds = ['triangle', 'sine', 'breath', 'exponential'];
+  const names = {triangle: 'Triangle', sine: 'Sine', breath: 'Natural breath', exponential: 'Exponential'};
+  const visibleCurves = new Set(kinds);
+  const expMinimum = Math.exp(-1), expSpan = Math.E - expMinimum;
+  const controls = Object.fromEntries(['steps', 'period', 'minimum', 'maximum', 'quantize', 'pwm', 'dither', 'pwm-frequency', 'cct', 'peak-dwell', 'min-dwell', 'smooth-ramp'].map(id => [id, byId(id)]));
+  const state = {steps: 2048, period: 3, minimum: 10, maximum: 100, quantize: false, pwm: true, dither: true, frequency: 20000, cct: '4000', peakDwell: 6, minDwell: 3, smoothRamp: true};
+  const whites = {'2700': [255, 170, 87], '3000': [255, 190, 128], '4000': [255, 228, 206], '5000': [255, 244, 237], '6500': [255, 255, 255]};
   const tickMs = 1.024;
+  const screen = byId('light-screen');
+  const fullscreenTarget = document.documentElement;
+  let selectedPattern = null, nativeFullscreen = false, controlsTimer;
   let playing = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let originTime = performance.now(), originPhase = 0;
   let geometry = {left: 46, top: 12, width: 1, height: 150};
   const actualPeriodMs = () => Math.round(state.period * 2) * 488 * tickMs;
   const phaseAt = now => (originPhase + (playing ? (now - originTime) / actualPeriodMs() : 0)) % 1;
-  const shape = (kind, phase) => kind === 'triangle' ? 1 - Math.abs(2 * phase - 1) : (1 - Math.cos(2 * Math.PI * phase)) / 2;
+  // Timer2 period is (PR2 + 1) * prescaler * 4 / Fosc; duty has four counts per timer count.
+  function pwmTiming() {
+    const prescaler = [1, 4, 16].find(p => Math.round(8000000 / (4 * state.frequency * p)) <= 256) || 16;
+    const timerCounts = Math.max(1, Math.min(256, Math.round(8000000 / (4 * state.frequency * prescaler))));
+    const counts = 4 * timerCounts;
+    return {prescaler, pr2: timerCounts - 1, counts, frequency: 8000000 / (prescaler * counts)};
+  }
+  let timing = pwmTiming();
+  function roundedRamp(t) {
+    const edge = .12;
+    if (t < edge) return t * t / (2 * edge * (1 - edge));
+    if (t > 1 - edge) return 1 - (1 - t) ** 2 / (2 * edge * (1 - edge));
+    return (t - edge / 2) / (1 - edge);
+  }
+  function breathTiming() {
+    const rest = state.minDwell / 100, peak = state.peakDwell / 100;
+    const rampTime = 1 - rest - peak;
+    const rise = rampTime * 5 / 13, fall = rampTime * 8 / 13;
+    const riseStart = rest / 2, peakStart = riseStart + rise;
+    return {rest, peak, rise, fall, riseStart, peakStart, fallStart: peakStart + peak, fallEnd: 1 - rest / 2};
+  }
+  const breathRamp = t => state.smoothRamp ? roundedRamp(t) : t;
+  function shape(kind, phase) {
+    if (kind === 'triangle') return 1 - Math.abs(2 * phase - 1);
+    if (kind === 'sine') return (1 - Math.cos(2 * Math.PI * phase)) / 2;
+    // sin(2π * phase − π/2) = −cos(2π * phase): same ThingPulse curve, starting at minimum.
+    if (kind === 'exponential') return (Math.exp(-Math.cos(2 * Math.PI * phase)) - expMinimum) / expSpan;
+    const breath = breathTiming();
+    if (phase < breath.riseStart || phase >= breath.fallEnd) return 0;
+    if (phase < breath.peakStart) return breathRamp((phase - breath.riseStart) / breath.rise);
+    if (phase < breath.fallStart) return 1;
+    return 1 - breathRamp((phase - breath.fallStart) / breath.fall);
+  }
   function brightness(kind, phase) {
-    const value = state.minimum + (state.maximum - state.minimum) * shape(kind, phase);
-    return state.quantize ? Math.round(value) : value;
+    let value = state.minimum + (state.maximum - state.minimum) * shape(kind, phase);
+    if (state.quantize) value = Math.round(value);
+    if (state.pwm) {
+      const counts = timing.counts * (state.dither ? 8 : 1);
+      value = Math.round(value * counts / 100) * 100 / counts;
+    }
+    return value;
   }
   const sample = (kind, phase) => brightness(kind, Math.floor(phase * state.steps) / state.steps);
+  const format = value => Number(value.toFixed(5)).toString();
+  const brightnessText = value => value.toFixed(3) + '%';
+  function updateBreathLabels() {
+    const breath = breathTiming();
+    for (const [id, value] of [['peak-dwell', state.peakDwell], ['min-dwell', state.minDwell]]) {
+      byId(id + '-value').value = `${value}% · ${(state.period * value / 100).toFixed(3)} s`;
+    }
+    const profile = state.smoothRamp ? 'Smooth' : 'Linear';
+    const summary = `${format(breath.rise * 100)}% inhale · ${state.peakDwell}% peak hold · ${format(breath.fall * 100)}% exhale · ${state.minDwell}% minimum rest`;
+    byId('breath-profile').textContent = `${profile} ramps · longer exhale`;
+    byId('breath-timing').textContent = `${summary}. Total period: ${state.period.toFixed(1)} s.`;
+    updatePlotDescription();
+  }
+  function updatePlotDescription() {
+    const visible = kinds.filter(kind => visibleCurves.has(kind));
+    let description = `Brightness versus time after phase sampling and optional percentage and PWM rounding. Visible curves: ${visible.length ? visible.map(kind => names[kind]).join(', ') : 'none'}.`;
+    if (visibleCurves.has('breath')) description += ` ${state.smoothRamp ? 'Smooth' : 'Linear'} natural breath: ${byId('breath-timing').textContent} Minimum rest is split across the cycle boundary.`;
+    if (visibleCurves.has('exponential')) description += ' Exponential uses the normalized exponential of a sinusoid, shifted to start at minimum.';
+    byId('plot-description').textContent = description + ' The cursor follows the live lights.';
+  }
+  function updatePlotVisibility() {
+    for (const kind of kinds) {
+      const hidden = !visibleCurves.has(kind);
+      byId(kind + '-curve').toggleAttribute('hidden', hidden);
+      byId(kind + '-dot').toggleAttribute('hidden', hidden);
+    }
+    byId('plot-empty').hidden = visibleCurves.size !== 0;
+    updatePlotDescription();
+  }
   const xFor = phase => geometry.left + phase * geometry.width;
   const yFor = percent => geometry.top + geometry.height * (1 - percent / 100);
   const node = (tag, attrs, text) => {
@@ -154,53 +296,61 @@
   };
   function drawPlot() {
     const width = Math.max(240, byId('wave-plot').getBoundingClientRect().width);
-    const height = 208;
     geometry = {left: 46, top: 12, width: width - 60, height: 150};
-    byId('wave-plot').setAttribute('viewBox', `0 0 ${width} ${height}`);
+    byId('wave-plot').setAttribute('viewBox', `0 0 ${width} 208`);
     const group = byId('plot-static');
     group.replaceChildren();
     for (const value of [0, 50, 100]) {
       group.append(node('line', {x1: xFor(0), y1: yFor(value), x2: xFor(1), y2: yFor(value), stroke: 'var(--line)'}));
       group.append(node('text', {x: geometry.left - 9, y: yFor(value) + 4, 'text-anchor': 'end'}, value + '%'));
     }
-    for (const [phase, label] of [[0, '0'], [0.5, (state.period / 2).toFixed(2).replace(/0$/, '')], [1, state.period.toFixed(1)]]) {
+    for (const [phase, label] of [[0, '0'], [.5, format(state.period / 2)], [1, state.period.toFixed(1)]]) {
       group.append(node('text', {x: xFor(phase), y: 183, 'text-anchor': phase === 0 ? 'start' : phase === 1 ? 'end' : 'middle'}, label));
     }
-    group.append(node('text', {x: xFor(0.5), y: 204, 'text-anchor': 'middle'}, 'Time (seconds, nominal)'));
-    for (const kind of ['triangle', 'sine']) {
+    group.append(node('text', {x: xFor(.5), y: 204, 'text-anchor': 'middle'}, 'Time (seconds, nominal)'));
+    for (const kind of kinds) {
       let path = `M ${xFor(0)} ${yFor(brightness(kind, 0))}`;
       const levels = new Set();
       for (let i = 0; i < state.steps; ++i) {
-        const value = brightness(kind, i / state.steps);
-        levels.add(value.toFixed(8));
+        levels.add(brightness(kind, i / state.steps).toFixed(8));
         path += ` H ${xFor((i + 1) / state.steps)} V ${yFor(brightness(kind, ((i + 1) % state.steps) / state.steps))}`;
       }
-      group.append(node('path', {d: path, fill: 'none', stroke: `var(--${kind})`, 'stroke-width': 2, 'stroke-linejoin': 'round'}));
-      byId(kind + '-levels').textContent = levels.size + ' distinct levels';
+      group.append(node('path', {id: kind + '-curve', d: path, fill: 'none', stroke: `var(--${kind})`, 'stroke-width': 2, 'stroke-linejoin': 'round'}));
+      byId(kind + '-levels').textContent = levels.size + ' distinct levels / cycle';
     }
+    updatePlotVisibility();
     const rate = state.steps / (actualPeriodMs() / 1000);
-    byId('metrics').replaceChildren();
-    const rateText = document.createElement('span');
-    rateText.textContent = `${rate.toFixed(1)} internal phase updates/s`;
-    byId('metrics').append(rateText);
-    const interval = document.createElement('span');
-    interval.textContent = `${(actualPeriodMs() / state.steps).toFixed(2)} ms per phase`;
-    byId('metrics').append(interval);
+    const metrics = [`${rate.toFixed(1)} ideal phase updates/s`, `${(actualPeriodMs() / state.steps).toFixed(2)} ms per phase`];
+    if (state.pwm) {
+      metrics.push(`${format(timing.frequency)} Hz actual PWM · PR2=${timing.pr2} · 1:${timing.prescaler}`);
+      metrics.push(`${timing.counts + 1} hardware levels · ${format(100 / timing.counts)}% duty step`);
+      if (state.dither) metrics.push(`${timing.counts * 8 + 1} possible average levels · ${format(100 / (timing.counts * 8))}% step`);
+    } else metrics.push('PWM resolution disabled');
+    byId('metrics').replaceChildren(...metrics.map(text => {
+      const span = document.createElement('span');
+      span.textContent = text;
+      return span;
+    }));
     if (rate > 1000 / tickMs) {
       const warning = document.createElement('span');
       warning.className = 'warning';
-      warning.textContent = 'Above the current firmware tick rate';
+      warning.textContent = 'Ideal phase rate exceeds firmware tick rate; real firmware skips phases';
       byId('metrics').append(warning);
     }
   }
   function render(now) {
     const phase = phaseAt(now);
-    for (const kind of ['triangle', 'sine']) {
+    for (const kind of kinds) {
       const value = sample(kind, phase);
       byId(kind + '-bulb').style.opacity = value / 100;
-      byId(kind + '-value').value = `${state.quantize ? value : value.toFixed(1)}%`;
+      byId(kind + '-value').value = brightnessText(value);
       byId(kind + '-dot').setAttribute('cx', xFor(phase));
       byId(kind + '-dot').setAttribute('cy', yFor(value));
+    }
+    if (selectedPattern) {
+      const value = sample(selectedPattern, phase);
+      byId('screen-light').style.opacity = value / 100;
+      byId('screen-value').value = brightnessText(value);
     }
     byId('playhead').setAttribute('x1', xFor(phase));
     byId('playhead').setAttribute('x2', xFor(phase));
@@ -211,42 +361,128 @@
     originPhase = phaseAt(now);
     originTime = now;
   }
+  function updateWhite(value) {
+    state.cct = value;
+    controls.cct.value = value;
+    byId('screen-cct').value = value;
+    document.documentElement.style.setProperty('--white', whites[value].join(', '));
+  }
   function updateControls(event) {
+    // Incomplete number edits stay in the field without replacing the last valid model.
+    if (event.target === controls['pwm-frequency'] && !controls['pwm-frequency'].validity.valid) return;
     const now = performance.now();
     pauseAt(now);
     state.steps = Number(controls.steps.value);
     state.period = Number(controls.period.value);
-    if (event.target === controls.minimum) state.minimum = Math.min(Number(controls.minimum.value), state.maximum - 1);
-    if (event.target === controls.maximum) state.maximum = Math.max(Number(controls.maximum.value), state.minimum + 1);
+    if (event.target === controls.minimum) state.minimum = Math.min(Number(controls.minimum.value), state.maximum - .25);
+    if (event.target === controls.maximum) state.maximum = Math.max(Number(controls.maximum.value), state.minimum + .25);
     state.quantize = controls.quantize.checked;
+    state.pwm = controls.pwm.checked;
+    state.dither = controls.dither.checked;
+    state.peakDwell = Number(controls['peak-dwell'].value);
+    state.minDwell = Number(controls['min-dwell'].value);
+    state.smoothRamp = controls['smooth-ramp'].checked;
+    const frequency = controls['pwm-frequency'];
+    if (frequency.validity.valid && frequency.value !== '') state.frequency = Number(frequency.value);
+    timing = pwmTiming();
     controls.minimum.value = state.minimum;
     controls.maximum.value = state.maximum;
+    frequency.disabled = !state.pwm;
+    controls.dither.disabled = !state.pwm;
+    updateWhite(controls.cct.value);
     byId('steps-value').textContent = state.steps.toLocaleString();
     byId('period-value').value = state.period.toFixed(1) + ' s';
-    byId('minimum-value').value = state.minimum + '%';
-    byId('maximum-value').value = state.maximum + '%';
+    byId('minimum-value').value = brightnessText(state.minimum);
+    byId('maximum-value').value = brightnessText(state.maximum);
+    updateBreathLabels();
     drawPlot();
     render(now);
   }
-  Object.values(controls).forEach(control => control.addEventListener('input', updateControls));
-  byId('pause').addEventListener('click', () => {
+  function playbackLabels() {
+    byId('pause').textContent = byId('screen-pause').textContent = playing ? 'Pause' : 'Play';
+  }
+  function togglePlayback() {
     const now = performance.now();
     pauseAt(now);
     playing = !playing;
-    byId('pause').textContent = playing ? 'Pause' : 'Play';
+    playbackLabels();
     render(now);
+  }
+  function revealControls() {
+    screen.classList.add('show-controls');
+    clearTimeout(controlsTimer);
+    controlsTimer = setTimeout(() => screen.classList.remove('show-controls'), 2400);
+  }
+  async function openScreen(kind) {
+    selectedPattern = kind;
+    byId('screen-name').textContent = names[kind];
+    byId('screen-status').textContent = 'Move or tap to show controls · Space to pause · Escape to exit';
+    screen.showModal();
+    render(performance.now());
+    // Keep shortcuts inside the modal without pinning its controls open via focus-within.
+    screen.focus({preventScroll: true});
+    revealControls();
+    try {
+      // Dialog elements cannot themselves be Fullscreen API targets.
+      await fullscreenTarget.requestFullscreen();
+      // The preview may have been closed while the request was pending.
+      if (!screen.open) {
+        if (document.fullscreenElement === fullscreenTarget) await document.exitFullscreen();
+        return;
+      }
+      nativeFullscreen = document.fullscreenElement === fullscreenTarget;
+    } catch {
+      if (screen.open) byId('screen-status').textContent = 'Browser fullscreen unavailable; using a window-filling preview · Escape to exit';
+    }
+  }
+  function closeScreen() {
+    nativeFullscreen = false;
+    selectedPattern = null;
+    clearTimeout(controlsTimer);
+    if (screen.open) screen.close();
+    if (document.fullscreenElement === fullscreenTarget) document.exitFullscreen().catch(() => {});
+  }
+  Object.values(controls).forEach(control => control.addEventListener('input', updateControls));
+  document.querySelectorAll('[data-curve]').forEach(control => control.addEventListener('change', () => {
+    if (control.checked) visibleCurves.add(control.dataset.curve);
+    else visibleCurves.delete(control.dataset.curve);
+    updatePlotVisibility();
+  }));
+  controls['pwm-frequency'].addEventListener('change', () => {
+    if (!controls['pwm-frequency'].validity.valid || controls['pwm-frequency'].value === '') controls['pwm-frequency'].value = state.frequency;
   });
+  byId('pause').addEventListener('click', togglePlayback);
+  byId('screen-pause').addEventListener('click', togglePlayback);
   byId('step').addEventListener('click', () => {
     const now = performance.now();
     pauseAt(now);
     playing = false;
     originPhase = ((Math.floor(originPhase * state.steps) + 1) % state.steps) / state.steps;
-    byId('pause').textContent = 'Play';
+    playbackLabels();
     render(now);
   });
-  byId('pause').textContent = playing ? 'Pause' : 'Play';
-  new ResizeObserver(() => {drawPlot(); render(performance.now());}).observe(byId('wave-plot'));
-  function frame(now) {render(now); requestAnimationFrame(frame);}
+  document.querySelectorAll('[data-pattern]').forEach(button => button.addEventListener('click', () => openScreen(button.dataset.pattern)));
+  byId('screen-cct').replaceChildren(...[...controls.cct.options].map(option => option.cloneNode(true)));
+  byId('screen-cct').addEventListener('input', event => updateWhite(event.target.value));
+  byId('screen-exit').addEventListener('click', closeScreen);
+  screen.addEventListener('cancel', event => { event.preventDefault(); closeScreen(); });
+  screen.addEventListener('close', closeScreen);
+  document.addEventListener('fullscreenchange', () => {
+    if (nativeFullscreen && document.fullscreenElement !== fullscreenTarget) closeScreen();
+  });
+  screen.addEventListener('pointermove', revealControls);
+  screen.addEventListener('pointerdown', revealControls);
+  screen.addEventListener('keydown', event => {
+    revealControls();
+    if (event.code === 'Space' && !event.repeat && !event.target.closest('button, select, input')) {
+      event.preventDefault(); togglePlayback();
+    }
+  });
+  playbackLabels();
+  updateWhite(state.cct);
+  updateBreathLabels();
+  new ResizeObserver(() => { drawPlot(); render(performance.now()); }).observe(byId('wave-plot'));
+  function frame(now) { render(now); requestAnimationFrame(frame); }
   drawPlot();
   render(originTime);
   requestAnimationFrame(frame);

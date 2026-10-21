@@ -23,7 +23,7 @@ Physical board tests have not been performed.
   this one-count level; further Down taps/holds stay there. An Up tap from the
   one-count level returns to 10%.
 - In steady mode, hold a brightness button for about 400 ms to start changing by 1 percentage point
-  about every 20 ms, including 9%, 8%, down through 1%, then 0.25%. Holding Up
+  about every 102 ms, including 9%, 8%, down through 1%, then 0.25%. Holding Up
   from 0.25% starts at 1% and continues upward by 1%. Release after a hold does
   not add a coarse step. All intermediate levels survive power cycles.
 - Brightness adjustment in standby turns the main output on, including at a limit.
@@ -34,14 +34,19 @@ Physical board tests have not been performed.
   between steady and breathing modes. Otherwise it is off during normal
   standby/operation, solid while editing minimum, blinking while editing maximum, and blinking during the
   three-second reset confirmation period. Turning the output off cancels a flash.
+  Retiring a failed EEPROM slot starts a rapid warning blink until the map saves.
+  If no destination remains, the warning continues and saves stop. It overrides other LED patterns.
 - Brightness and period saves wait 900 ms after the last change; power changes,
   mode changes, editor confirmation, and settings reset request an immediate save.
   Animation alone never causes EEPROM writes. Unchanged settings cause no write.
 
 ## Breathing controls
 
-The output follows a 2,048-phase sine approximation between the saved minimum and
-maximum (default 10% and 100%), slowing near each endpoint. Hold power for one second
+The output follows the simulation's **Exponential** curve between the saved
+minimum and maximum (default 10% and 100%):
+`(exp(-cos(2*pi*phase)) - exp(-1)) / (exp(1) - exp(-1))`.
+It has symmetric rise/fall, a narrower peak, and a broader trough than sine,
+without explicit peak/minimum holds. Hold power for one second
 while the output is on to toggle breathing. Entering starts near the saved steady
 brightness, clamped to the breathing limits; exiting returns to steady brightness. After power-on/restoration,
 breathing starts at its minimum. The full rise-and-fall cycle defaults to 3 seconds.
@@ -60,18 +65,28 @@ separately and is not changed by the animation or period buttons.
 The 1.024 ms timebase uses 488 ticks per half-second setting: actual nominal full
 cycles are 0.499712–9.994240 seconds, before oscillator tolerance. PWM is
 20 kHz; the breathing envelope is independent of the PWM carrier.
-The full cycle has 2,048 phase positions and 513 normalized amplitude weights,
-enough to reach all 401 hardware duties including off and static full-on. At
-periods of 1.5 seconds and longer, every duty in the selected range appears in
-each complete cycle: 361 levels for default 10–100% limits, or 401 for 0–100%.
-The 1.024 ms update interval limits faster cycles: full-range 0.5- and 1-second
-cycles reach 293 and 391 distinct duties respectively. Periods below 2.5 seconds
-skip some phase positions to preserve timing; longer cycles visit all 2,048.
-The interpolated lookup table keeps sine error within two PWM counts of the ideal
-envelope across integer-percentage ranges. With the one-count minimum, only
-otherwise-zero frames are clipped to one; error against the shifted ideal sine
-is within three PWM counts. Mode entry stays within three PWM counts
-of the clamped steady brightness.
+The full cycle has 2,048 phase positions. A 33-byte Q8 lookup for the rising half
+is interpolated in Q13; the falling half reflects the phase. Internal Q3 targets
+are rounded to two fractional bits (Q2). A **10 kHz dithering interrupt** alternates
+adjacent hardware duties: four 100 us slots average exactly to a constant target,
+giving 0.0625% average-duty increments and a longest pattern of 0.4 ms (2.5 kHz).
+The carrier stays 20 kHz. There are 1,601 available average-duty commands over
+401 instantaneous hardware levels; a cycle need not visit all commands. Across
+all 2,048 phases, the full 0–100% exponential envelope visits 816 Q2 targets.
+Only breathing produces fractional targets. Steady levels and editor previews
+are exact duties; their update interrupt stops after one write. The rounding
+residual is preserved across animation frames and mode changes.
+
+Periods below 2.5 seconds skip some phase positions to preserve timing; longer
+cycles visit all 2,048. The interpolated target stays within two hardware counts
+of the simulation's analytical exponential curve across percentage ranges.
+With the one-count minimum, targets below one count are clipped to one: no
+dither slot falls below the selected 0.25% floor. Mode entry stays within three
+counts of clamped steady brightness. Actual low-end smoothness, driver pulse
+response, camera artifacts, and acoustic effects still require a board test.
+The existing breathing mode now uses this envelope; there is no additional mode
+or button gesture. All v6 saved settings remain compatible, including mode,
+period, brightness bounds, and the EEPROM retirement map.
 
 ### Min/max editor
 
@@ -98,14 +113,15 @@ immediately; the main LEDs keep a steady preview and controls remain responsive.
 The blink phase is transient and does not cause settings saves. A held
 pair triggers once; release both buttons before the next enter/exit hold. Power
 only switches the selected limit on a tap in the editor; power holds are ignored.
-Its normal on/off and mode-hold gestures resume after leaving. Individual up/down holds ramp by 1% every 20.48 ms
+Its normal on/off and mode-hold gestures resume after leaving. Individual up/down holds ramp by 1% every 102.4 ms
 after the 400 ms hold threshold, without an extra step on release.
 
 Both limits save together when you exit and survive power cycles. Unconfirmed
 edits are discarded on power loss; opening/closing without changing limits does
 not write EEPROM. Steady brightness and breathing period are preserved. The
-status LED turns off on exit. The size-optimized build fits with 31 flash
-words and three RAM bytes free; physical editor checks remain pending.
+status LED turns off on exit unless a save fault is latched. The size-optimized
+build fits with thirty-five flash words and eight RAM bytes free; physical editor checks
+remain pending.
 
 ### Settings reset
 
@@ -119,22 +135,25 @@ Short power taps still turn on normally; long holds do not become taps on releas
 
 The gesture must start while logically off: a dark 0% breathing frame is still on.
 Continued holding after reset does not retrigger or cause repeated EEPROM saves.
-Reset commits a new default-settings record rather than erasing the journal, so
-an interrupted transaction retains the last valid settings. The former five-second
+Reset commits a new default-settings record and preserves the retired-slot map.
+An interrupted transaction retains the last valid settings. The former five-second
 standby-indicator disable feature and its preference have been removed.
 
 ## PWM and timing
 
 User brightness settings are integer percentages. EEPROM stores percentages;
-legacy 10-bit duty records are decoded on startup. Runtime percentages convert
+only the current v6 percentage format is read on startup. Runtime percentages convert
 directly to the 400-count PWM period (four counts per percent), with a
-sixteen-bit duty interface and cache between the state machine and hardware. The breathing
-envelope operates directly in duty counts rather than rounding each frame to 1%.
+sixteen-bit Q3 duty interface (0..3200) between the state machine and hardware.
+The driver rounds to Q2 (0..1600), packs it into a byte pair, and preserves
+two fractional bits in a 10 kHz accumulator. The packed low bit stays zero so
+the ISR can position the hardware duty bits with a single shift.
 Intermediate levels use CCP1/Timer2 at **20,000 Hz** nominally with the 8 MHz clock
 (`PR2=99`, prescaler 1:1). Off and maximum use
 static inactive/active GP2 levels
 for true 0% and 100%. Timer0 independently free-runs at **1.024 ms/tick**.
-Intervals are rounded up: debounce/ramp 20.48 ms, brightness hold 400.384 ms,
+Intervals are rounded up: debounce/period repeat 20.48 ms, brightness repeat
+102.4 ms, brightness hold 400.384 ms,
 power mode hold 1000.448 ms after press debounce, and save 900.096 ms.
 Power taps below that hold threshold act after release debounce (about 20 ms).
 
@@ -223,60 +242,61 @@ Rebuild with `.\scripts\build-minipro.ps1`. See
 
 ## EEPROM journal
 
-The 256-byte EEPROM holds 16 rotating, 16-byte slots. Each version 5 record uses
-ten bytes; the rest is reserved. This layout makes room for both limits and keeps
-address calculations small while supporting safe migration from the 32-slot
-legacy journal.
+The 256-byte EEPROM holds sixteen aligned 16-byte slots. The current **v6** format
+stores settings and a durable bad-slot map together. Versions 1–5, unknown versions,
+and records on eight-byte half-slot boundaries are ignored. If no valid v6 record
+exists, startup uses defaults without writing EEPROM; the next changed settings
+start a v6 journal. Existing v5 preferences are not migrated.
 
 | Offset | Meaning |
 | --- | --- |
 | 0 | Commit marker `0xA5`, written last |
-| 1 | Version `5` (version `4` remains readable in aligned slots; `1`–`3` at their original eight-byte locations) |
+| 1 | Version `6` only |
 | 2–3 | 16-bit sequence, little-endian |
 | 4 | Bits 0–6: steady brightness 1–100%, or `0` for one PWM count; bit 7: power on |
-| 5 | Minimum 0–99%, or byte value `128` for one PWM count |
+| 5 | Minimum 0–99%, or `128` for one PWM count |
 | 6 | Bits 0–6: maximum 1–100%; bit 7: breathing enabled |
-| 7 | Cycle period in half-second steps, 1–20 |
-| 8 | CRC-8/SMBUS over bytes 1–7: poly `0x07`, init `0`, no reflection/xorout |
-| 9 | Zero migration guard, invalidating an overlapping legacy version byte |
+| 7 | Period in half-second settings, 1–20 |
+| 8–9 | Retired-slot bitmap, little-endian; bit N retires slot N |
+| 10 | CRC-8/SMBUS over bytes 1–9: polynomial `0x07`, init `0`, no reflection/xorout |
+| 11–15 | Reserved |
 
-Boot rejects bad markers, versions, CRCs, guards, and out-of-range settings, and
-compares sequences modulo 65536. This ordering assumes valid journal entries
-span fewer than 32768 updates, as normal operation of the ring ensures. Bounds
-must satisfy `0 <= minimum < maximum <= 100` after decoding the one-count
-sentinel. Legacy duties are restored to the nearest integer percentage; ordinary
-values in the new format still store percentages directly.
+Boot validates records and ORs all their maps **before** comparing sequences. It
+then excludes retired slots and restores the newest remaining settings. A stuck
+commit marker cannot make an old retired record win after sequence wrap. Bounds
+still require `minimum < maximum` after decoding the one-count sentinel.
 
-Versions 1/2 restore brightness and power in steady mode with the default
-breathing period. Version 3 additionally restores breathing mode and
-period. Versions 1–3 use default 10–100% breathing limits; version 4 restores
-both saved percentage limits. The first version 5 save selects a slot that
-cannot overlap the newest valid older record;
-its commit marker is written only after all payload and guard bytes verify.
-The guard prevents an old odd-slot record from reappearing when a CRC equals
-`0xA5` after sequence rollover. Firmware predating version 5 cannot read these
-records; the initial v5 firmware also rejects the new steady 1–9% values.
-Downgrading may therefore restore an older record or defaults.
-Legacy indicator preferences are accepted and ignored, including in older version
-4 records; a version 4 off minimum stays off even if its obsolete indicator bit
-was set. Version 5 reuses the standalone value `128` for the one-count minimum.
-Use the six-second power hold or
-`scripts/program.ps1 -ResetSettings` to restore all defaults. The bench image never
-accesses EEPROM, so its settings last only until power is disconnected.
+A save snapshots the requested settings, invalidates its destination, writes and
+verifies the payload, then writes and verifies the marker: twelve asynchronous
+byte writes. The latest committed slot is protected. Only the EEPROM unlock
+briefly disables interrupts. New requests remain pending during a transaction.
 
-A save snapshots the requested state, invalidates the next slot, writes and
-verifies each payload byte, then writes and verifies the final marker. It never
-overwrites the latest valid slot. Writes are asynchronous; only the EEPROM unlock
-sequence briefly disables interrupts. New requests arriving during a write remain
-pending and are compared against the completed snapshot. Failed verification
-preserves the prior committed state and retries after one second, avoiding a
-tight write loop. A later power change can request an earlier retry.
+A verification failure retries the slot once after one second. A second failure
+retires it and advances to another destination after another one-second delay.
+The map forces a save even if preferences have reverted to their saved values.
+New deferred adjustments restart the 900 ms quiet period without shortening a
+failure backoff; the next attempt waits for the longer remaining delay.
 
-A record normally uses eleven byte writes, including two writes to its marker.
-EEPROM is never initialized by the HEX. Check the programmer's erase/preserve
-settings if retaining existing settings across firmware updates matters.
-Without power-fail detection/hold-up, abrupt USB loss can discard changes still
-in the quiet window or an incomplete transaction; the previous record is retained.
+The status LED blinks 131.072 ms on/off (about 3.8 Hz) while a new retirement awaits
+a verified save. The warning overrides other LED patterns and clears after that
+save unless saving capacity is exhausted. At least two healthy slots are needed
+for ongoing atomic saves: the protected record and another destination. With no
+destination remaining, writes stop and the warning continues; controls and main
+lighting keep working from RAM. A reboot may rediscover retirements that could
+not be committed, while restoring the last readable, unretired settings or defaults.
+
+Retirement survives reboot and the six-second preference reset. Two consecutive
+transient failures can retire a healthy slot; there is no automatic unretirement.
+Only deliberate full EEPROM erasure, such as `scripts/program.ps1 -ResetSettings`,
+clears the maps. It does not repair physically damaged cells. See
+[bad-slot tracking](docs/bad-slot-tracking.md) for the design and validation.
+
+EEPROM is never initialized by the HEX. Programmer preservation retains all raw
+bytes, but unsupported save versions remain unreadable. Abrupt USB loss can
+discard changes in the quiet period or an incomplete transaction; the previous
+committed settings/map remain available. The indicator-only bench image never
+accesses EEPROM.
+
 
 ## Validation
 
@@ -284,38 +304,65 @@ in the quiet window or an incomplete transaction; the previous record is retaine
 a hold, limits, long holds, chords, power priority, standby adjustment, restoration,
 write avoidance, deferred/prompt saves, power/brightness overlaps with either
 release order and held buttons, six-second reset timing/cancellation, status LED
-rendering, one-second power holds and immediate tap timing, all 2,048 sine positions,
+rendering, one-second power holds and immediate tap timing, all 2,048 exponential-envelope positions,
 all 20 complete breathing periods and their visited phases, default/full/narrow
 ranges, all 100 percentage spans at all 20 periods, complete duty coverage from
-1.5 seconds onward, sine approximation error across every PWM span, 505,000 mode-entry cases,
+1.5 seconds onward in rounded targets, exponential-curve approximation error across every PWM span, 505,000 mode-entry cases,
 period wraparound and delayed saves, animation write avoidance, breathing power
 restoration, editor entry/exit timing, preview and save behavior, all 5,050 valid
 min/max pairs with 10% taps, 1% hold ramps, conflict prevention,
-legacy-record compatibility, state changes during an asynchronous write,
+old-format rejection, current v6 restoration, state changes during an asynchronous write,
 CRC corruption, invalid fields, three complete slot rotations, sequence rollover,
-and write-verification failures with retry backoff.
+and write-verification failures with retry-once/retire, protected-slot wraparound,
+capacity exhaustion, fault indication, and recovery.
 
 `tests/test_hw.c` compiles the production hardware code against a small register
-model. It checks all 401 duties, including transitions differing only in bit 8,
-the Timer2 setup, static endpoints, status LED, tick handling, and EEPROM interrupt
+model. It checks all 3,201 internal Q3 inputs rounded to Q2, all four starting
+residuals, exact four-slot means, 100,000 target changes without residual loss,
+integer-IRQ shutoff, and the Timer2 setup,
+static endpoints, status LED, tick handling, and EEPROM interrupt
 restoration. Delayed/stopped Timer2 tests check the polling limit and watchdog
 recovery from both full-on and active PWM. `tests/test_main.c` executes the
 production main loop and hardware driver with injected ticks/buttons and an LF
-watchdog model, checking normal servicing and missing-tick/render-stall recovery.
+watchdog model, checking normal servicing, missing-tick/render-stall recovery,
+and the physical LED register during EEPROM failure and recovery. It also verifies
+that breathing dithers while every steady level and both editor previews remain fixed.
 The model supplies Timer2 boundaries; it does not measure waveform
 timing, voltages, emissions, or execution speed on the PIC.
 
-The power-loss matrix tests every possible torn-byte value at each of eleven write
-positions, both for the first record and reuse of a full ring: **5,632 cases**.
-An additional **11,517 migration cases** cover all legacy versions and slot
-positions, including full torn-byte coverage for representative even/odd layouts.
-Another **2,816 cases** check interrupted reset saves, for **19,965 cases** total.
+After a normal target build, `node tests/test_hex.js` checks the linked HEX:
+14,950 settings-copy/startup cases and 102,432 interrupt entries across all internal
+targets/residuals, both RAM banks, and coincident Timer0 interrupts. The last duty
+write takes at most 34 cycles (17 us); the full ISR takes at most 53 cycles
+(26.5 us), including four-cycle entry latency. Another 103,200 cycle-driven schedules
+check target publication and Timer0 arrival alignments: no slot is lost, no target
+is torn, and both fields finish within 91 cycles (45.5 us) of the boundary, before
+the next 50 us PWM latch. Another 23,723 linked-envelope cases check the simulator
+formula, reflected exhale, peak encoding, and interrupts during calculation.
+The isolated envelope takes at most 502 cycles (251 us), excluding interrupts.
+
+The linked main-loop model runs 18 real-time schedules with 19,800 completed ticks
+and 144 asynchronous EEPROM writes. No timer tick or PWM latch is lost. The worst
+boundary-to-watchdog interval is 3,098 cycles (1.549 ms): occasional settings/save
+work spans one extra queued tick, which is recovered without sustained slowdown.
+Duty writes within these main-loop schedules finish within 72 cycles (36 us).
+These are instruction-model checks; physical waveform and jitter tests remain pending.
+
+The settings matrices interrupt all twelve writes: **6,144** initial/reused journal,
+**3,072** reset, **14,448** lowest-level, and **3,072** retirement-save cases.
+
+`tests/test_storage.c` adds **70,000 saves** across sequence wrap and repeated
+reboots, healthy-slot reuse, durable map union, capacity exhaustion, and **6,144**
+metadata interruptions. Combined, the suites cover **32,880 interrupted writes**.
+Old versions 1–5 are rejected and reserved tail bytes are ignored.
 It also tests loss after the marker completes but before RAM bookkeeping.
 The mock models a single in-progress EEPROM byte; bench power cycling remains
 necessary to validate the actual power supply and EEPROM behavior.
 
 See `docs/bench-checklist.md` for the remaining physical acceptance steps and
 `docs/validation.md` for the recorded build results.
+The current 102.4 ms brightness-ramp build was programmed and verified at
+2026-10-21T09:45:27Z with EEPROM reset to erased `0xFF` and user IDs preserved.
 
 References: [PIC12F683 datasheet](https://ww1.microchip.com/downloads/en/DeviceDoc/41211D.pdf),
 [MPLAB XC8 downloads](https://www.microchip.com/en-us/tools-resources/develop/mplab-xc-compilers/xc8),

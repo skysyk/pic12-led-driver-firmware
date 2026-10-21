@@ -4,39 +4,41 @@
 
 #define EVENT(member) in[offsetof(button_events_t, member)]
 static dimmer_state_t current;
-static uint8_t brightness_blocked;
+static uint8_t blocked; /* Bits 0/1: gesture blocks; bits 2..4: ramp repeats to skip. */
 static uint16_t breath_phase;
 /* Animation and editor blinking are mutually exclusive; share the timer storage. */
 static union { uint16_t fraction; uint8_t blink; } breath_clock;
 #define breath_time breath_clock.fraction
 static uint16_t mode_flash;
 static uint16_t editor_hold;
-static uint8_t editor_blocked;
 /* Bits 0..1: 0 normal, 1 minimum, 2 maximum; bit 2: maximum's dark blink phase. */
 static uint8_t editor;
 static uint8_t reset_state; /* 1: eligible, 2/3: armed LED on/off, 4: completed. */
 
-/* Q9 half-cosine, first quarter sampled every 64 of 2048 phases.
-   The last byte encodes 256 modulo 256; its preceding delta is still 50.
-   The exact quarter endpoint is handled separately to retain all 513 weights. */
-static const uint8_t sine_quarter[9] = {
-    0, 5, 19, 43, 75, 114, 158, 206, 0
+/* Simulator exponential: (exp(-cos(2*pi*phase/2048)) - exp(-1)) /
+   (exp(1) - exp(-1)). Symmetry needs only 33 Q8 knots for the rising half.
+   The final zero encodes 256; its preceding wrapped delta is still +1. */
+static const uint8_t breath_knots[33] = {
+    0, 0, 1, 2, 3, 5, 7, 10, 14, 18, 22, 28, 34, 41, 50, 59,
+    69, 80, 92, 106, 120, 134, 150, 165, 181, 196, 210, 223,
+    234, 244, 250, 255, 0
 };
 
-/* Full cycle, phase 0..2047; inverse mode-entry searches use the rising half. */
-static uint16_t sine_level(uint16_t phase)
+/* Full cycle, phase 0..2047; reflect the exhale onto the rising half. */
+static uint16_t exponential_level(uint16_t phase, uint8_t span)
 {
-    uint8_t index, base, invert;
+    uint8_t index, base;
+    uint16_t level;
     if (phase & 1024u) phase = BREATHE_PHASE_STEPS - phase;
-    invert = phase > 512u;
-    if (invert) phase = 1024u - phase;
-    index = (uint8_t)(phase >> 6);
-    if (index == 8u) return 256u;
-    base = sine_quarter[index];
-    phase &= 63u;
-    base += (uint8_t)(((uint16_t)(uint8_t)(sine_quarter[index + 1u] - base) *
-                       phase + 32u) >> 6);
-    return invert ? 512u - base : base;
+    index = (uint8_t)(phase >> 5);
+    if (index == 32u) level = 8192u;
+    else {
+        base = breath_knots[index];
+        level = ((uint16_t)base << 5) +
+                (uint16_t)(uint8_t)(breath_knots[index + 1u] - base) * (phase & 31u);
+    }
+    /* Q13 * span / 256 gives Q3 counts with two bounded 16-bit products. */
+    return (level >> 8) * span + (((uint16_t)(uint8_t)level * span + 128u) >> 8);
 }
 
 void dimmer_defaults(dimmer_state_t *s)
@@ -69,21 +71,20 @@ void dimmer_copy_state(uint8_t *destination, const uint8_t *source)
 void dimmer_init(const dimmer_state_t *s)
 {
     DIMMER_COPY(&current, s);
-    brightness_blocked = 0;
+    blocked = 0;
     breath_phase = 0;
     breath_time = 0;
     mode_flash = 0;
     editor_hold = editor = 0;
-    editor_blocked = 0;
     reset_state = 0;
 }
 
 #ifdef FIRMWARE_TEST
 uint8_t dimmer_editing(void) { return editor & 3u; }
 uint16_t dimmer_phase(void) { return breath_phase; }
-uint16_t dimmer_sine(uint16_t phase)
+uint16_t dimmer_envelope(uint16_t phase)
 {
-    return sine_level(phase);
+    return exponential_level(phase, 128u);
 }
 #endif
 
@@ -99,16 +100,13 @@ uint16_t dimmer_output(void)
     if (editor == 1u) percent = current.minimum;
     else if (editor) percent = current.maximum;
     if (editor || !(current.breath & BREATHE_MODE)) {
-        if (percent == DIMMER_LOWEST || (!editor && !percent)) return 1;
-        return dimmer_duty(percent);
+        if (percent == DIMMER_LOWEST || (!editor && !percent)) return 8;
+        return dimmer_duty(percent) << 3;
     }
-    level = sine_level(breath_phase);
     percent = current.minimum & 127u;
     span = current.maximum - percent;
-    /* Q9 times four counts/percent: dividing by 128 keeps the product in 16 bits. */
-    level = dimmer_duty(percent) + ((level * span + 64u) >> 7);
-    /* The one-count floor clips only the otherwise-zero sine frames. */
-    if (!level && current.minimum == DIMMER_LOWEST) ++level;
+    level = (dimmer_duty(percent) << 3) + exponential_level(breath_phase, span);
+    if (level < 8u && current.minimum == DIMMER_LOWEST) level = 8;
     return level;
 }
 
@@ -161,12 +159,13 @@ uint8_t dimmer_tick(const button_events_t *e)
             changed = DIMMER_RENDER;
         }
     }
+    if (EVENT(pressed) & BUTTON_BRIGHTNESS) blocked &= 3u;
     /* Only releasing both brightness buttons rearms a completed or
        power-cancelled editor gesture. */
-    if (!editor_blocked && current.power_on && (current.breath & BREATHE_MODE) &&
+    if (!(blocked & 2u) && current.power_on && (current.breath & BREATHE_MODE) &&
         EVENT(down) == BUTTON_BRIGHTNESS) {
         if (++editor_hold == BUTTON_EDITOR_TICKS) {
-            editor_blocked = 1;
+            blocked |= 2u;
             if (editor) {
                 editor = 0;
                 breath_phase = 0;
@@ -178,13 +177,13 @@ uint8_t dimmer_tick(const button_events_t *e)
         }
     } else editor_hold = 0;
     if ((EVENT(down) | EVENT(released)) & BUTTON_POWER)
-        brightness_blocked = editor_blocked = 1;
+        blocked = 3;
     else if ((EVENT(down) & BUTTON_BRIGHTNESS) == BUTTON_BRIGHTNESS)
-        brightness_blocked = 1;
+        blocked |= 1u;
     /* Power cancels overlapping brightness gestures, including release events
        and later repeats. Re-arm only after all brightness buttons are up. */
-    if (brightness_blocked) {
-        if (!(EVENT(down) & BUTTON_BRIGHTNESS)) brightness_blocked = editor_blocked = 0;
+    if (blocked & 1u) {
+        if (!(EVENT(down) & BUTTON_BRIGHTNESS)) blocked = 0;
         if (!((EVENT(short_press) | EVENT(held)) & BUTTON_POWER)) return changed;
     }
     if ((EVENT(held) & BUTTON_POWER) && current.power_on && !editor) {
@@ -192,18 +191,17 @@ uint8_t dimmer_tick(const button_events_t *e)
         mode_flash = STATUS_MODE_FLASH_TICKS;
         value = current.minimum & 127u;
         if (current.brightness <= value) breath_phase = 0;
-        else if (current.brightness >= current.maximum) breath_phase = 1024;
+        else if (current.brightness >= current.maximum) breath_phase = BREATHE_PEAK_PHASE;
         else {
-            /* Invert the same rising sine envelope to enter near the saved
-               steady brightness, rather than treating sine phase as linear. */
+            /* Search the same monotone rising envelope near saved brightness. */
             action = current.maximum - value;
-            breath_time = (uint16_t)(current.brightness - value) * 512u;
+            breath_time = (uint16_t)(current.brightness - value) * 32u;
             low = 0;
-            /* Successive bits search the same 256 four-position phase values. */
+            /* 256 four-phase positions span the rising half up to phase 1020. */
             high = 128;
             do {
                 value = low | high;
-                if (sine_level((uint16_t)value << 2) * action <= breath_time) low = value;
+                if (exponential_level((uint16_t)value << 2, action) <= breath_time) low = value;
             } while ((high >>= 1) != 0);
             breath_phase = (uint16_t)low << 2;
         }
@@ -246,6 +244,15 @@ uint8_t dimmer_tick(const button_events_t *e)
             return DIMMER_CHANGED | DIMMER_POWER_CHANGED;
         }
         return DIMMER_CHANGED; /* Every period step changes or wraps. */
+    }
+    /* Apply the first hold step, then skip four repeats for 102.4 ms steps.
+       Period controls above retain their cadence. New presses clear the count. */
+    if (EVENT(repeat)) {
+        if (blocked & 28u) {
+            blocked -= 4u;
+            return changed;
+        }
+        blocked |= (BRIGHTNESS_REPEAT_DIVIDER - 1u) << 2;
     }
     if (editor == 1u) {
         level = &current.minimum;

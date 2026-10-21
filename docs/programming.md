@@ -5,7 +5,7 @@ the locally built open-source MiniPro executable. Use the appropriate DIP8 or
 SOIC8-to-DIP adapter and correct socket placement. Keep the target off the powered
 LED board while programming. The script never selects ICSP mode.
 
-The current 20 kHz / 2,048-phase sine controller was programmed and verified with
+The preceding 20 kHz / 2,048-phase sine controller was programmed and verified with
 this script at 2026-10-20T04:49:53Z (October 19 local time), preserving EEPROM and
 user IDs. It includes watchdog recovery, maximum-editor blinking, the one-count
 steady/minimum brightness level, and the separate Down tap required to leave
@@ -13,6 +13,28 @@ that minimum for off in the editor. It additionally ramps through
 steady 9% down to 1% before 0.25% when held, while keeping the direct tap from
 10% to 0.25%. The run is recorded in `validation.md`;
 one-count PWM measurements, board acceptance, and physical watchdog tests remain pending.
+The current build uses the simulation's symmetric exponential curve, approximated
+with a 33-byte half-cycle table and 2,048 phases. Breathing alone uses 10 kHz,
+two-bit fractional dithering; the PWM carrier stays 20 kHz. Steady/editor duties
+remain exact, and the selected one-count minimum is preserved. Held brightness
+steps now repeat every 102.4 ms, while period controls still repeat at 20.48 ms.
+This updated build was programmed and verified at 2026-10-21T09:45:27Z with all
+256 EEPROM bytes reset to erased `0xFF` and user IDs preserved. Saved preferences
+and the bad-slot map were cleared; the next boot uses defaults. The preceding exponential/Q2 build with
+40.96 ms brightness steps was programmed and verified at 2026-10-21T09:07:48Z,
+preserving EEPROM and user IDs. The preceding natural-envelope build without
+dithering was programmed and verified at 2026-10-21T08:04:41Z, preserving EEPROM
+and user IDs. Existing v6 settings need no reset for this update.
+The current build uses v6 records with persistent bad-slot tracking. Two failed
+transactions retire a slot while preserving the newest valid record. The status
+LED rapidly blinks (131 ms on/off) until the map saves, or continuously if no
+safe destination remains. The preceding natural-envelope build with dithering
+was programmed and verified at 2026-10-21T06:05:35Z, preserving all EEPROM bytes
+and user IDs; existing
+v6 settings remain compatible and need no reset. The preceding sine/dithering
+build was programmed and verified at 2026-10-20T09:03:08Z with all EEPROM bytes
+reset to `0xFF`, user IDs preserved, and configuration `0x33C4`. Existing v5 and
+earlier settings are still ignored. See the latest physical run in `validation.md`.
 The indicator-only build has been built and host-tested
 but has not been programmed. The software-enabled watchdog retains configuration
 `0x33C4`.
@@ -49,9 +71,13 @@ The default image is `build/led-controller.hex`. The device profile defaults to
 corresponding MiniPro aliases. A device name does not change physical adapter
 wiring; check the programmer's placement guidance for the adapter being used.
 
-EEPROM is copied back by default, preserving this firmware's saved brightness
-and power state, breathing mode, period, and min/max limits. The old standby LED
-preference is ignored. To start with erased EEPROM (first-run defaults: off, 50%,
+EEPROM is copied back by default. Existing v6 records preserve brightness, power,
+breathing mode, period, min/max limits, and retired slots. The main firmware reads
+only v6; older records remain backed up/preserved as raw bytes but are not migrated.
+The six-second button reset preserves the bad-slot map. The following programmer
+reset deliberately erases both preferences and retirement maps; it does not repair
+physically damaged cells.
+To start with erased EEPROM (first-run defaults: off, 50%,
 steady mode, 3-second breathing period, 10–100% breathing limits, status LED off):
 
 ```powershell

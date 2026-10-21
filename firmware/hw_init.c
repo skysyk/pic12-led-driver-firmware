@@ -15,10 +15,22 @@
 
 static volatile uint8_t pending_ticks;
 static uint8_t gpio_shadow;
-static uint16_t last_duty;
+/* Packed Q3 register layout with bit 0 always zero: two fractional bits in
+   bits 1..2 and DC1B in bits 3..4. This keeps the ISR shift to one instruction.
+   Publish with TMR2IE disabled. Only breathing produces fractional targets. */
+static volatile uint8_t pwm_high, pwm_low;
+static uint8_t dither; /* Preserve the two-bit residual across target changes. */
 
 void __interrupt() timer_isr(void)
 {
+    if (PIE1bits.TMR2IE && PIR1bits.TMR2IF) {
+        PIR1bits.TMR2IF = 0;
+        dither = (dither & 6u) + pwm_low;
+        CCPR1L = pwm_high;
+        if (dither & 32u) ++CCPR1L;
+        CCP1CON = (uint8_t)(0x0cu | ((dither & 24u) << 1));
+        if (!(pwm_low & 6u)) PIE1bits.TMR2IE = 0;
+    }
     if (INTCONbits.T0IF) {
         INTCONbits.T0IF = 0;
         if (pending_ticks != 255u) ++pending_ticks;
@@ -50,14 +62,16 @@ void hw_init(void)
     CCPR1L = 0;
     PR2 = BOARD_PWM_PR2;
     TMR2 = 0;
-    T2CON = 0x04; /* Timer2 on, prescale 1:1, postscale 1:1. */
+    T2CON = 0x0c; /* 20 kHz PWM, postscale 1:2 for 10 kHz dither updates. */
     TRISIO = BOARD_INPUT_MASK;
     EECON1 = 0;
     pending_ticks = 0;
-    last_duty = 0xffffu;
+    pwm_high = 0xffu; /* Invalid high byte forces the first render. */
+    pwm_low = 0; /* The updater starts idle, including after explicit re-init. */
     TMR0 = 0;
     INTCONbits.T0IF = 0;
     INTCONbits.T0IE = 1;
+    INTCONbits.PEIE = 1;
     INTCONbits.GIE = 1;
     WDTCON = BOARD_WATCHDOG_CONTROL;
     CLRWDT();
@@ -85,16 +99,25 @@ uint8_t hw_buttons(void)
 
 void hw_render(uint16_t duty, uint8_t indicator)
 {
+    uint8_t high, low;
 #if BOARD_INDICATOR_ONLY
     duty = 0;
 #endif
+    /* Round the Q3 envelope to two fractional bits (Q2), not to an integer. */
+    duty = (duty + 1u) & 0xfffeu;
     if (indicator == BOARD_STATUS_ACTIVE_HIGH) gpio_shadow |= BOARD_LED_MASK;
     else gpio_shadow &= (uint8_t)~BOARD_LED_MASK;
     /* Full GPIO writes avoid read-modify-write of a live CCP1 output. */
     GPIO = gpio_shadow;
-    if (duty == last_duty) return;
-    last_duty = duty;
-    if (duty == 0 || duty >= BOARD_PWM_PERIOD) {
+    high = (uint8_t)(duty >> 5);
+    low = (uint8_t)duty & 31u;
+    if (high == pwm_high && low == pwm_low) return;
+    PIE1bits.TMR2IE = 0; /* Publish both duty bytes atomically to the ISR. */
+    /* Fractional targets have a running updater: retain pending boundaries.
+       Only an idle integer target can leave a stale flag to discard. */
+    if (!(pwm_low & 6u)) PIR1bits.TMR2IF = 0;
+    pwm_high = high; pwm_low = low;
+    if (duty == 0 || duty >= BOARD_PWM_PERIOD * 8u) {
 #if BOARD_PWM_ACTIVE_HIGH
         if (duty) gpio_shadow |= BOARD_PWM_MASK;
 #else
@@ -105,10 +128,11 @@ void hw_render(uint16_t duty, uint8_t indicator)
         CCP1CON = 0; /* Static endpoint gives true 0% and 100%. */
     } else {
         uint8_t polls = 0;
-        if (!BOARD_PWM_ACTIVE_HIGH) duty = BOARD_PWM_PERIOD - duty;
-        /* Update shortly after a PWM boundary so the two duty fields latch
-           together at the following boundary. Timer2 IRQ remains disabled. */
-        PIR1bits.TMR2IF = 0;
+#if !BOARD_PWM_ACTIVE_HIGH
+#error PWM currently requires an active-high output
+#endif
+        /* Wait for a postscaled PWM boundary before enabling the updater.
+           Both duty fields then finish before the following 50 us latch. */
         while (!PIR1bits.TMR2IF) {
             /* A byte-sized budget bounds the wait even if Timer0 also stops. */
             if (--polls == 0) {
@@ -123,13 +147,15 @@ void hw_render(uint16_t duty, uint8_t indicator)
                 for (;;) { NOP(); }
             }
         }
-        CCPR1L = (uint8_t)(duty >> 2);
-        CCP1CON = (uint8_t)(0x0cu | ((duty & 3u) << 4));
+        /* Integer targets (all steady/editor levels) stop after one IRQ. */
+        PIE1bits.TMR2IE = 1;
     }
 }
 
 #if !BOARD_INDICATOR_ONLY
+#ifndef __XC8
 uint8_t hal_eeprom_busy(void) { return EECON1bits.WR; }
+#endif
 
 uint8_t hal_eeprom_read(uint8_t address)
 {

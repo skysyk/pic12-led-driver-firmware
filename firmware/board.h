@@ -33,22 +33,29 @@
 /* LFINTOSC/32768: about 1.06 s, software enabled; config stays 0x33C4. */
 #define BOARD_WATCHDOG_CONTROL 0x15u
 #define BUTTON_RAMP_TICKS TICKS_FROM_MS(20)
+/* Brightness consumes one in five repeats: 102.4 ms. Period buttons use all. */
+#define BRIGHTNESS_REPEAT_DIVIDER 5u
+#define BRIGHTNESS_RAMP_TICKS (BRIGHTNESS_REPEAT_DIVIDER * BUTTON_RAMP_TICKS)
+#if BRIGHTNESS_REPEAT_DIVIDER < 1 || BRIGHTNESS_REPEAT_DIVIDER > 8
+#error Brightness repeat divider must fit the three-bit gesture counter
+#endif
 #define BUTTON_MODE_TICKS TICKS_FROM_MS(1000)
 #define BUTTON_EDITOR_TICKS TICKS_FROM_MS(1000)
 /* 488 Timer0 ticks = 499.712 ms; period is 1..20 half-second steps. */
 #define BREATHE_STEP_TICKS 488u
-/* Enough sine phases and Q9 amplitude precision to reach every PWM duty. */
+/* Exponential envelope: 2048 phases, Q3 calculation, Q2 output dithering. */
 #define BREATHE_PHASE_STEPS 2048u
+#define BREATHE_PEAK_PHASE 1024u
 #define BREATHE_DEFAULT_PERIOD 6u
 #define BREATHE_MAX_PERIOD 20u
 #if BREATHE_PHASE_STEPS != 2048u || BREATHE_MAX_PERIOD * BREATHE_STEP_TICKS + BREATHE_PHASE_STEPS > 65535u
-#error Sine timing requires 2048 phases and a sixteen-bit accumulator
+#error Breathing timing requires 2048 phases and a sixteen-bit accumulator
 #endif
 #define BREATHE_MODE 128u
 #define BREATHE_PERIOD_MASK 31u
 #define STORAGE_DELAY_TICKS TICKS_FROM_MS(900)
 #define STORAGE_RETRY_TICKS TICKS_FROM_MS(1000)
-#define DIMMER_MIN_PERCENT 10u /* Coarse-step boundary and v1-v4 restore limit. */
+#define DIMMER_MIN_PERCENT 10u /* Coarse-step boundary. */
 #define DIMMER_MAX_PERCENT 100u
 #define DIMMER_DEFAULT_PERCENT 50u
 #define DIMMER_STEP_PERCENT 10u

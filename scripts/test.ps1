@@ -27,6 +27,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Host compilation failed.' }
     & './build/test_firmware.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Firmware tests failed.' }
+    & $Compiler @prefixArgs @options firmware/dimmer.c firmware/storage.c tests/test_storage.c -o build/test_storage.exe
+    if ($LASTEXITCODE -ne 0) { throw 'Persistent storage tests compilation failed.' }
+    & './build/test_storage.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Persistent storage tests failed.' }
     & $Compiler @prefixArgs @options '-Itests/fake_pic' '-Wno-unknown-pragmas' tests/test_hw.c -o build/test_hw.exe
     if ($LASTEXITCODE -ne 0) { throw 'Hardware-register model compilation failed.' }
     & './build/test_hw.exe'

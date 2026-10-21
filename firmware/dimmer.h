@@ -31,11 +31,12 @@ uint8_t dimmer_tick(const button_events_t *events);
 const dimmer_state_t *dimmer_state(void);
 /* Four hardware counts per percent at 20 kHz; evaluate percent once. */
 #define dimmer_duty(percent) ((uint16_t)((uint16_t)(percent) << 2))
+/* Q3 target; the driver rounds to Q2. Only breathing has fractional duties. */
 uint16_t dimmer_output(void);
 uint8_t dimmer_status_led(void);
 #ifdef FIRMWARE_TEST
 uint8_t dimmer_editing(void);
 uint16_t dimmer_phase(void);
-uint16_t dimmer_sine(uint16_t phase);
+uint16_t dimmer_envelope(uint16_t phase);
 #endif
 #endif

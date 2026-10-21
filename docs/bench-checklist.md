@@ -40,6 +40,14 @@ These checks are pending; compilation and host simulation cannot verify them.
 7. Inspect EEPROM after repeated adjustments and power toggles to confirm slot
    rotation, valid CRCs, no writes during inactivity, and correct newest record.
    Interrupt USB during commits and confirm fallback to a valid older record.
+   Confirm healthy saves leave the status LED off and unchanged settings avoid
+   writes. Stuck-byte injection is covered by host tests; if a real save fault
+   occurs, expect two attempts per destination, one second between attempts,
+   retirement, and a rapid status LED blink (131 ms on/off) until the map saves.
+   The newest committed block must stay protected. With no other healthy destination,
+   writes stop and the warning continues; controls/PWM must remain responsive.
+   A verified usable save clears the warning. Fault indication overrides editor/reset
+   patterns. Check slow breathing too: status rendering now runs each tick.
 8. Only after these checks, solder the production part into the board. Retain an
    off-board programming route: existing circuit components can interfere with ICSP.
 
@@ -52,7 +60,10 @@ These checks are pending; compilation and host simulation cannot verify them.
   including during a dark 0% breathing frame.
 - Power presses released before one second must turn the output off as soon as
   release is debounced, including 400–999 ms presses. Check that two quick taps
-  turn off and back on without changing mode. Up/down hold ramps stay at 400 ms.
+  turn off and back on without changing mode. Up/down hold ramps start after
+  400 ms; steady/editor brightness then changes by 1% every 102.4 ms. Breathing
+  period steps retain the 20.48 ms repeat rate. Check release/repress resets the
+  brightness-repeat skip count and taps still change by 10 percentage points.
 - Each switch between steady and breathing must light the status LED for about
   half a second, identically in both directions, then turn it off. Every separate
   hold gives a new flash. Brightness/period controls must remain responsive during it.
@@ -61,21 +72,25 @@ These checks are pending; compilation and host simulation cannot verify them.
   Scope complete rise-and-fall cycles, including 0.499712 and 9.994240 seconds
   nominally, and verify the 20 kHz carrier stays constant. Check smoothness at
   both extremes and button response while the animation and EEPROM writes run.
-- Verify the sine envelope slows near both endpoints and starts near the clamped
-  steady brightness on mode entry. At slow periods, scope the individual raw PWM
-  levels: a 99–100% range should use all five duties 396..400 rather than only the
-  two integer-percent endpoints. At periods of 1.5 seconds and longer, check that
-  every duty appears (401 over 0–100%, 361 over 10–100%). The 2,048-phase envelope
-  skips some positions at periods below 2.5 seconds; 0.5/1-second full-range cycles
-  use only 293/391 duties because of the rendering interval. Check that controls
-  and EEPROM activity do not stretch the cycle or miss Timer0 ticks, including at
-  the shortest period.
+- Compare the exponential curve with the simulator: symmetric inhale/exhale,
+  a narrower peak and broader trough than sine, and no explicit endpoint holds.
+  Confirm mode entry starts near clamped steady brightness. At slow periods,
+  scope the individual raw PWM levels: fractional targets should alternate adjacent
+  duties at 100 us update boundaries, with an exact four-slot mean (0.4 ms) for
+  a constant target. The PWM carrier must stay 20 kHz. Check narrow 0–1% and
+  99–100% ranges, including off and full-on, and the
+  one-count minimum: that setting must never emit a zero-duty slot. Steady and
+  editor outputs must stay constant. Check flicker directly, during eye movement,
+  and through a camera; listen for noise at different loads. Compare smoothness
+  at 0.5, 3, and 10 s periods. The 2,048-phase envelope skips some positions below
+  2.5 seconds. Check that controls and EEPROM activity do not stretch the cycle
+  or miss Timer0 ticks, including at the shortest period.
 - Confirm both-button cancellation and power priority during period changes.
   A brightness button in standby must wake the saved breathing mode and adjust
   its period, without changing steady brightness.
 - Change period, wait at least one second, and cycle USB. Check mode/period,
   steady brightness, power state, and limits all restore. Check
-  startup with existing version 1/2 journals; mode should default to steady and
+  startup with existing versions 1–5 journals; mode should default to steady and
   period to 3 seconds until changed. Animation must not create journal entries.
 - While breathing, hold both brightness buttons for about one second to enter
   minimum editing. The status LED must light and the output become steady at that
@@ -100,10 +115,12 @@ These checks are pending; compilation and host simulation cannot verify them.
   buttons, then release power: the chord must remain cancelled until both
   brightness buttons are released. USB cycling after a
   completed save must restore both limits; cycling before exit must discard edits.
-- Inspect the new 16-slot journal and legacy migration. Preserve the original
-  EEPROM dump and test power interruption during migration off-board. Confirm
-  older mode/period settings survive and unedited limits default to 10–100%.
-  Obsolete indicator preferences must not affect the status LED.
+- Inspect the 16-slot v6 journal. Preserve an EEPROM dump and confirm v6 preferences
+  and retirement maps survive a power cycle. Versions 1–5 must be ignored and use
+  defaults if no valid v6 record exists; subsequent adjustments start a v6 journal.
+  After a retirement has been persisted, verify its slot is skipped after reboot
+  and a six-second preference reset preserves the map. Only programmer erasure
+  should clear it. Atomic saves need two healthy slots, with the newest protected.
 
 ## Settings reset acceptance
 

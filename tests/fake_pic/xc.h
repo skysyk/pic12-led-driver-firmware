@@ -16,10 +16,15 @@ typedef union {
     struct { unsigned RD:1, WR:1, WREN:1; } bits;
 } test_eecon_t;
 typedef struct { unsigned TMR2IF:1; } test_pir1_t;
+typedef union {
+    uint8_t value;
+    struct { unsigned unused:1, TMR2IE:1; } bits;
+} test_pie1_t;
 
 static volatile test_intcon_t test_intcon;
 static volatile test_eecon_t test_eecon;
 static volatile test_pir1_t test_pir1;
+static volatile test_pie1_t test_pie1;
 static unsigned test_timer_accesses;
 static unsigned test_timer_ready_at, test_timer_running = 1;
 /* A boundary can arrive immediately, after several polls, or never. */
@@ -35,7 +40,9 @@ static volatile test_pir1_t *test_timer_boundary(void)
 #define EECON1 test_eecon.value
 #define EECON1bits test_eecon.bits
 #define PIR1bits (*test_timer_boundary())
-static volatile uint8_t PIE1, OSCCON, ANSEL, ADCON0, CMCON0, VRCON, TRISIO;
+#define PIE1 test_pie1.value
+#define PIE1bits test_pie1.bits
+static volatile uint8_t OSCCON, ANSEL, ADCON0, CMCON0, VRCON, TRISIO;
 static volatile uint8_t GPIO, WPU, IOC, OPTION_REG, T1CON, CCP1CON, CCPR1L;
 static volatile uint8_t PR2, TMR2, T2CON, TMR0, EEADR, EEDAT, EECON2;
 static volatile uint8_t WDTCON;
