@@ -1,5 +1,8 @@
 # Validation record — current working tree
 
+[Build and flash runbook](../README.md#build-and-flash-runbook) |
+[Coverage overview](test-coverage.md) | [Board acceptance checklist](bench-checklist.md)
+
 The current build uses the simulator's exponential curve, 10 kHz two-bit
 fractional dithering for breathing only, and 1% brightness steps every 102.4 ms
 while held. It was programmed and verified at 2026-10-21T09:45:27Z with all EEPROM
