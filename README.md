@@ -1,27 +1,19 @@
-# PIC12F683 QY-K4 LED controller
+# PIC12F683 OY-K4 LED controller
 
-Replacement C firmware for the PIC12F683-based QY-K4 LED controller, providing
-steady dimming, adjustable breathing, and persistent settings. The controller
-and indicator-only bench images build with MPLAB XC8; portable C tests exercise
-the production button, dimmer, and EEPROM code on a PC.
+Replacement C firmware for the generic PIC12 SOIC-8 based OY-K4 LED controller found
+in [this](https://www.amazon.com/Signs-Decor-Bedroom-Birthday-Decoration/dp/B0F9NTBJCY)
+and other LED neon sign products. Implements setting and power memory, 0.25%->..10%..->100%
+brightness levels, and a breathing mode with adjustable min/max brightness and period.
+The entire implementation including original driver layout and replacement plan were developed
+with GPT-6 Astra.
 
-The current controller image has been programmed and read back successfully.
-Physical board acceptance and waveform measurements remain pending; see the
-[validation record](docs/validation.md) and [bench checklist](docs/bench-checklist.md).
-
-## Project structure
-
-All paths below are relative to the repository root. A fresh checkout contains
-source, scripts, tests, and documentation. Tools and generated artifacts are
-local to your machine and excluded by [.gitignore](.gitignore).
-
+## Project Structure
 ```text
 pic12-led-driver-firmware/
-|-- firmware/       PIC firmware, board pin/polarity settings, and storage logic
+|-- firmware/       PIC firmware source, board pin/polarity settings, and storage logic
 |-- scripts/        PowerShell build, test, HEX verification, and flashing commands
 |-- tests/          Host C suites, fake PIC registers, linked-image and script tests
 |-- docs/           Technical design, validation records, and programming notes
-|-- LICENSE         MIT license
 |-- .tools/         Local compiler/SDK/dependency downloads (ignored; prepare first)
 |-- minipro/        External MiniPro source checkout (ignored; prepare first)
 |-- build/          Generated images, maps, test executables, and caches (ignored)
@@ -35,7 +27,7 @@ and [board reconstruction notes](QY-K4_reconstruction_notes.md).
 | --- | --- |
 | `.tools/xc8-v4.00/bin/xc8-cc.exe` | XC8 compiler; extract or install before building. |
 | `.tools/pic-device-pack/xc8/` | Extracted PIC10-12Fxxx device-pack support files. |
-| `.tools/zig-x86_64-windows-0.15.2/zig.exe` | Portable C compiler for host tests and the MiniPro build. |
+| `.tools/zig-x86_64-windows-0.15.2/zig.exe` | Portable C compiler for host tests and the MiniPro tools build. |
 | `.tools/zlib-1.3.2/` | Extracted zlib sources used when building MiniPro. |
 | `.tools/tl866-driver/` | Optional location for USB driver downloads/extraction and installation logs. |
 | `minipro/` | Clone of the upstream programmer tool, including its own Git metadata. |
@@ -48,101 +40,6 @@ Build scripts do not download tools or clone dependencies. Prepare `.tools/` and
 `minipro/` first using the runbook below. A normal build creates `build/` but does
 not create programming backups or access the programmer. `-WhatIf` also creates
 no backups and makes no USB calls.
-
-## User guide
-
-The three buttons are **Power**, **Up**, and **Down**. A Power tap is a press and
-release before one second; Up/Down taps are released before their 400 ms hold
-threshold. Actions occur after button debounce, so the durations below are
-approximate. A hold performs its action without requiring a release; releasing
-after a hold adds no tap action.
-
-With erased or unsupported EEPROM settings, the controller starts **off**, in
-steady mode, with **50%** brightness, a **3-second** breathing cycle, and **10–100%**
-breathing limits. Otherwise it restores the saved output state and preferences.
-
-### Button reference
-
-| State / mode | Button gesture | Result |
-| --- | --- | --- |
-| Off / standby | Tap Power | Turn on in the saved steady or breathing mode. Breathing starts at its minimum. |
-| Off / standby | Tap or hold Up / Down | Turn on and adjust the saved mode: brightness in steady mode, cycle period in breathing mode. Wakes even at a brightness limit. |
-| On, outside the limit editor | Tap Power | Turn off, retaining the selected mode and settings. |
-| On, steady or breathing | Hold Power for 1 second | Switch steady ↔ breathing once, keep output on, and flash the status LED for about 0.5 seconds. Release before another mode hold. Longer holds do not reset settings. |
-| Steady | Tap Up / Down | Raise / lower brightness by 10 percentage points, within 10–100%, with an extra 0.25% level. Down from 10% or below selects 0.25%; Up from 0.25% selects 10%. |
-| Steady | Hold Up / Down for 400 ms | Ramp by 1 percentage point about every 102 ms. Includes 1–9% and the 0.25% floor; holding Up from 0.25% starts at 1%. Down never turns the output off. |
-| Breathing | Tap Up / Down | Lengthen / shorten the full rise-and-fall cycle by 0.5 seconds. Wraps between 0.5 and 10 seconds. |
-| Breathing | Hold Up / Down for 400 ms | Repeat period changes about every 20 ms, including wraparound. |
-| Breathing | Hold Up + Down together for 1 second | Pause breathing and enter the minimum-brightness editor. Release both buttons before another editor entry/exit gesture. |
-| Minimum or maximum editor | Tap Up / Down | Adjust the selected limit by 10 percentage points, clamped to keep minimum below maximum. The main LEDs show a steady preview. See the low-level rules below. |
-| Minimum or maximum editor | Hold Up / Down for 400 ms | Ramp the selected limit by 1 percentage point about every 102 ms, respecting the limits and the 0.25% minimum stop. |
-| Minimum or maximum editor | Tap Power | Switch between editing minimum and maximum. |
-| Minimum or maximum editor | Hold Power | No action; normal on/off and mode switching resume after leaving the editor. |
-| Minimum or maximum editor | Hold Up + Down together for 1 second | Save both limits together and resume breathing from the minimum. |
-| Off / standby | Hold Power continuously for 3 seconds | Arm settings reset; the status LED starts blinking. Keep holding to confirm. |
-| Reset hold started while off | Release Power before 6 seconds total, after the tap threshold | Cancel reset; remain off with settings unchanged. |
-| Reset hold started while off | Keep holding Power for 6 seconds total | Restore the defaults above and remain off. Preserve the EEPROM retired-slot map; continued holding does not repeat the reset. |
-| Any mode | Overlap Power with Up / Down | Power takes priority and cancels the brightness/period gesture until both Up and Down are released. |
-| Outside the editor entry/exit gesture | Press Up + Down together | Cancel individual adjustments until both buttons are released. In steady mode or standby, this does not open the editor. |
-
-### Control flow
-
-Up and Down change brightness in steady mode, cycle period in breathing mode,
-and the selected brightness limit in the editor. Reset is available only when
-the Power hold **starts while off**; a dark breathing frame still counts as on.
-
-```mermaid
-flowchart TD
-    Off["Off / standby"] -->|"Tap Power: resume"| Mode{"Saved mode"}
-    Off -->|"Up / Down: wake and adjust"| Mode
-    Mode -->|"Steady"| Steady["Steady brightness"]
-    Mode -->|"Breathing"| Breath["Breathing"]
-    Steady <-->|"Hold Power 1 s"| Breath
-    Steady -->|"Tap Power"| Off
-    Breath -->|"Tap Power"| Off
-    Steady -->|"Up / Down: brightness"| Steady
-    Breath -->|"Up / Down: cycle period"| Breath
-    Breath -->|"Hold Up + Down 1 s"| Min["Edit minimum: solid indicator"]
-    Min <-->|"Tap Power"| Max["Edit maximum: blinking indicator"]
-    Min -->|"Up / Down: minimum"| Min
-    Max -->|"Up / Down: maximum"| Max
-    Min -->|"Hold Up + Down 1 s: save"| Breath
-    Max -->|"Hold Up + Down 1 s: save"| Breath
-    Off -->|"Hold Power 3 s"| Armed["Reset pending: blinking indicator"]
-    Armed -->|"Release before 6 s total: cancel"| Off
-    Armed -->|"Keep holding to 6 s total"| Defaults["Restore defaults; preserve retired slots"]
-    Defaults --> Off
-```
-
-### Breathing limits and saved settings
-
-Enter the limit editor while breathing, adjust minimum, tap Power to select
-maximum, then hold Up + Down again to save and exit. Minimum can be off (0%),
-0.25%, or a whole percentage below maximum; maximum is 1–100%. Down reaches
-0.25% before off. **Holding Down stops at 0.25%**: release it and give a separate
-Down tap to select off. Up from off selects 0.25% first; another tap selects 10%
-subject to maximum, while a continued hold ramps through 1%, 2%, and so on.
-
-Entering breathing starts near the saved steady brightness, clamped to its
-limits; exiting restores steady brightness. Its brightness rises and falls
-smoothly with an exponential envelope, with no explicit pauses at the endpoints.
-Period changes leave steady brightness and breathing limits intact.
-
-Brightness and period changes save after about 900 ms of inactivity. Power,
-mode, editor confirmation, and reset request an immediate asynchronous save.
-Allow the save to finish before disconnecting power; the last committed settings
-are restored if power is lost during a save. Unconfirmed limit edits are lost on
-power failure, and unchanged settings or animation alone do not write EEPROM.
-See [EEPROM journaling](docs/eeprom-journal.md) for format and recovery details.
-
-| Status LED | Meaning |
-| --- | --- |
-| Off | Normal operation or standby. |
-| On for about 0.5 seconds | Switched between steady and breathing. Turning the output off cancels the flash. |
-| Solid | Editing the breathing minimum. |
-| Blinking about 250 ms on / 250 ms off | Editing the breathing maximum. |
-| Blinking about 500 ms on / 500 ms off | Reset armed; release to cancel or continue holding to six seconds total. |
-| Rapid blinking, about 131 ms on / 131 ms off | EEPROM slot retirement awaits a verified save. Overrides all other indications; if no safe destination remains, saves stop and the warning continues while controls work from RAM. |
 
 ## Build and flash runbook
 
@@ -302,6 +199,101 @@ erase preferences **and the retired-slot map** while programming, use:
 That option differs from the six-second button reset, which preserves retired
 slots. See [programming and recovery details](docs/programming.md) for the exact
 write order, alternative tool/backup paths, and failure handling.
+
+## User guide
+
+The three buttons are **Power**, **Up**, and **Down**. A Power tap is a press and
+release before one second; Up/Down taps are released before their 400 ms hold
+threshold. Actions occur after button debounce, so the durations below are
+approximate. A hold performs its action without requiring a release; releasing
+after a hold adds no tap action.
+
+With erased or unsupported EEPROM settings, the controller starts **off**, in
+steady mode, with **50%** brightness, a **3-second** breathing cycle, and **10–100%**
+breathing limits. Otherwise it restores the saved output state and preferences.
+
+### Button reference
+
+| State / mode | Button gesture | Result |
+| --- | --- | --- |
+| Off / standby | Tap Power | Turn on in the saved steady or breathing mode. Breathing starts at its minimum. |
+| Off / standby | Tap or hold Up / Down | Turn on and adjust the saved mode: brightness in steady mode, cycle period in breathing mode. Wakes even at a brightness limit. |
+| On, outside the limit editor | Tap Power | Turn off, retaining the selected mode and settings. |
+| On, steady or breathing | Hold Power for 1 second | Switch steady ↔ breathing once, keep output on, and flash the status LED for about 0.5 seconds. Release before another mode hold. Longer holds do not reset settings. |
+| Steady | Tap Up / Down | Raise / lower brightness by 10 percentage points, within 10–100%, with an extra 0.25% level. Down from 10% or below selects 0.25%; Up from 0.25% selects 10%. |
+| Steady | Hold Up / Down for 400 ms | Ramp by 1 percentage point about every 102 ms. Includes 1–9% and the 0.25% floor; holding Up from 0.25% starts at 1%. Down never turns the output off. |
+| Breathing | Tap Up / Down | Lengthen / shorten the full rise-and-fall cycle by 0.5 seconds. Wraps between 0.5 and 10 seconds. |
+| Breathing | Hold Up / Down for 400 ms | Repeat period changes about every 20 ms, including wraparound. |
+| Breathing | Hold Up + Down together for 1 second | Pause breathing and enter the minimum-brightness editor. Release both buttons before another editor entry/exit gesture. |
+| Minimum or maximum editor | Tap Up / Down | Adjust the selected limit by 10 percentage points, clamped to keep minimum below maximum. The main LEDs show a steady preview. See the low-level rules below. |
+| Minimum or maximum editor | Hold Up / Down for 400 ms | Ramp the selected limit by 1 percentage point about every 102 ms, respecting the limits and the 0.25% minimum stop. |
+| Minimum or maximum editor | Tap Power | Switch between editing minimum and maximum. |
+| Minimum or maximum editor | Hold Power | No action; normal on/off and mode switching resume after leaving the editor. |
+| Minimum or maximum editor | Hold Up + Down together for 1 second | Save both limits together and resume breathing from the minimum. |
+| Off / standby | Hold Power continuously for 3 seconds | Arm settings reset; the status LED starts blinking. Keep holding to confirm. |
+| Reset hold started while off | Release Power before 6 seconds total, after the tap threshold | Cancel reset; remain off with settings unchanged. |
+| Reset hold started while off | Keep holding Power for 6 seconds total | Restore the defaults above and remain off. Preserve the EEPROM retired-slot map; continued holding does not repeat the reset. |
+| Any mode | Overlap Power with Up / Down | Power takes priority and cancels the brightness/period gesture until both Up and Down are released. |
+| Outside the editor entry/exit gesture | Press Up + Down together | Cancel individual adjustments until both buttons are released. In steady mode or standby, this does not open the editor. |
+
+### Control flow
+
+Up and Down change brightness in steady mode, cycle period in breathing mode,
+and the selected brightness limit in the editor. Reset is available only when
+the Power hold **starts while off**; a dark breathing frame still counts as on.
+
+```mermaid
+flowchart TD
+    Off["Off / standby"] -->|"Tap Power: resume"| Mode{"Saved mode"}
+    Off -->|"Up / Down: wake and adjust"| Mode
+    Mode -->|"Steady"| Steady["Steady brightness"]
+    Mode -->|"Breathing"| Breath["Breathing"]
+    Steady <-->|"Hold Power 1 s"| Breath
+    Steady -->|"Tap Power"| Off
+    Breath -->|"Tap Power"| Off
+    Steady -->|"Up / Down: brightness"| Steady
+    Breath -->|"Up / Down: cycle period"| Breath
+    Breath -->|"Hold Up + Down 1 s"| Min["Edit minimum: solid indicator"]
+    Min <-->|"Tap Power"| Max["Edit maximum: blinking indicator"]
+    Min -->|"Up / Down: minimum"| Min
+    Max -->|"Up / Down: maximum"| Max
+    Min -->|"Hold Up + Down 1 s: save"| Breath
+    Max -->|"Hold Up + Down 1 s: save"| Breath
+    Off -->|"Hold Power 3 s"| Armed["Reset pending: blinking indicator"]
+    Armed -->|"Release before 6 s total: cancel"| Off
+    Armed -->|"Keep holding to 6 s total"| Defaults["Restore defaults; preserve retired slots"]
+    Defaults --> Off
+```
+
+### Breathing limits and saved settings
+
+Enter the limit editor while breathing, adjust minimum, tap Power to select
+maximum, then hold Up + Down again to save and exit. Minimum can be off (0%),
+0.25%, or a whole percentage below maximum; maximum is 1–100%. Down reaches
+0.25% before off. **Holding Down stops at 0.25%**: release it and give a separate
+Down tap to select off. Up from off selects 0.25% first; another tap selects 10%
+subject to maximum, while a continued hold ramps through 1%, 2%, and so on.
+
+Entering breathing starts near the saved steady brightness, clamped to its
+limits; exiting restores steady brightness. Its brightness rises and falls
+smoothly with an exponential envelope, with no explicit pauses at the endpoints.
+Period changes leave steady brightness and breathing limits intact.
+
+Brightness and period changes save after about 900 ms of inactivity. Power,
+mode, editor confirmation, and reset request an immediate asynchronous save.
+Allow the save to finish before disconnecting power; the last committed settings
+are restored if power is lost during a save. Unconfirmed limit edits are lost on
+power failure, and unchanged settings or animation alone do not write EEPROM.
+See [EEPROM journaling](docs/eeprom-journal.md) for format and recovery details.
+
+| Status LED | Meaning |
+| --- | --- |
+| Off | Normal operation or standby. |
+| On for about 0.5 seconds | Switched between steady and breathing. Turning the output off cancels the flash. |
+| Solid | Editing the breathing minimum. |
+| Blinking about 250 ms on / 250 ms off | Editing the breathing maximum. |
+| Blinking about 500 ms on / 500 ms off | Reset armed; release to cancel or continue holding to six seconds total. |
+| Rapid blinking, about 131 ms on / 131 ms off | EEPROM slot retirement awaits a verified save. Overrides all other indications; if no safe destination remains, saves stop and the warning continues while controls work from RAM. |
 
 ## Technical documentation
 
